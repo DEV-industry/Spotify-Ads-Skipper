@@ -3,6 +3,8 @@ import os
 import psutil
 import win32gui
 import win32process
+import win32api  
+import win32con  
 
 
 AD_TITLES = ["Spotify", "Advertisement", "Reklama", ""] 
@@ -10,11 +12,11 @@ USER_NAME = os.getlogin()
 SPOTIFY_PATH = f"C:\\Users\\{USER_NAME}\\AppData\\Roaming\\Spotify\\Spotify.exe"
 
 def get_spotify_title():
-   
+    
     found_windows = []
 
     def callback(hwnd, windows):
-        
+       
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         try:
             proc = psutil.Process(pid)
@@ -23,7 +25,7 @@ def get_spotify_title():
                 title = win32gui.GetWindowText(hwnd)
                 is_visible = win32gui.IsWindowVisible(hwnd)
                 
-               
+                
                 if is_visible and title != "":
                     windows.append(title)
                     
@@ -55,13 +57,21 @@ def restart_spotify():
     try:
         os.startfile(SPOTIFY_PATH)
         print("--- Spotify uruchomione ponownie ---")
-        time.sleep(4) 
+        
+        
+        time.sleep(5) 
+        
+        print("--- Próba wznowienia odtwarzania (Symulacja Play/Pause) ---")
+        
+        win32api.keybd_event(win32con.VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_MEDIA_PLAY_PAUSE, 0, win32con.KEYEVENTF_KEYUP, 0)
+
     except FileNotFoundError:
         print(f"BŁĄD: Nie znaleziono pliku pod ścieżką: {SPOTIFY_PATH}")
         print("Sprawdź czy ścieżka do Spotify.exe jest poprawna!")
 
 def main():
-    print("Monitorowanie Spotify rozpoczęte (Tryb poprawiony)...")
+    print("Monitorowanie Spotify rozpoczęte (Auto-Start Muzyki)...")
     print("------------------------------------------------")
 
     while True:
