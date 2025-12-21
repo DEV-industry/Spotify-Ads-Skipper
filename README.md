@@ -68,3 +68,18 @@ Spotify-Ads-Skipper/
 ├── autostart_windows.ps1        # Auto-start installation script
 ├── Spotify.py                   # Main source code
 └── README.md                    # This file
+
+```
+
+---
+
+## ⚠️ Disclaimer
+
+This project was created for educational purposes to demonstrate Windows automation using Python (specifically `win32gui`, `subprocess`, and `psutil` libraries).
+
+The author does not encourage blocking ads on services you enjoy. If you love Spotify, please consider purchasing Premium to support the artists.
+
+---
+<div align="center">
+  Made with ❤️ and 🐱 ~ DEV
+</div>
