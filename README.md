@@ -2,14 +2,13 @@
 
   <img src="cat.png" alt="Logo" width="120" height="120" />
 
-  # 🐱 Spotify Ads Skipper
+  # Spotify Ads Skipper
   
   **Your music, uninterrupted. Lightweight, fast, and invisible.**
-
+  
+  ![Spotify](https://img.shields.io/badge/Spotify-1ED760?style=for-the-badge&logo=spotify&logoColor=white)
   ![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python)
-  ![Platform](https://img.shields.io/badge/Platform-Windows-win?style=for-the-badge&logo=windows)
-  ![Status](https://img.shields.io/badge/Status-Stable-green?style=for-the-badge)
-
+  ![Platform](https://img.shields.io/badge/Platform-Windows-win?style=for-the-badge&logo=windows) 
 </div>
 
 ---
