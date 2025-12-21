@@ -5,9 +5,9 @@ import win32gui
 import win32process
 import win32api
 import win32con
+import subprocess  
 
 
-AD_TITLES = ["Spotify", "Advertisement", "Reklama", ""] 
 USER_NAME = os.getlogin()
 SPOTIFY_PATH = f"C:\\Users\\{USER_NAME}\\AppData\\Roaming\\Spotify\\Spotify.exe"
 
@@ -37,7 +37,7 @@ def get_spotify_title():
     return None
 
 def restart_spotify():
-    print("\n!!! --- Wykryto reklamę! Restartowanie Spotify... --- !!!\n")
+    print("\n!!! --- Wykryto reklamę (brak myślnika)! Restartowanie w tle... --- !!!\n")
     
     
     for proc in psutil.process_iter(['pid', 'name']):
@@ -51,8 +51,16 @@ def restart_spotify():
     
     
     try:
-        os.startfile(SPOTIFY_PATH)
-        print("--- Spotify uruchomione ponownie ---")
+        
+        startup_info = subprocess.STARTUPINFO()
+        startup_info.dwFlags = subprocess.STARTF_USESHOWWINDOW
+        
+        startup_info.wShowWindow = win32con.SW_SHOWMINNOACTIVE 
+        
+        
+        subprocess.Popen([SPOTIFY_PATH, "--minimized"], startupinfo=startup_info)
+        
+        print("--- Spotify uruchomione w tle ---")
         
         
         time.sleep(5) 
@@ -64,9 +72,11 @@ def restart_spotify():
 
     except FileNotFoundError:
         print(f"BŁĄD: Nie znaleziono pliku pod ścieżką: {SPOTIFY_PATH}")
+    except Exception as e:
+        print(f"BŁĄD uruchamiania: {e}")
 
 def main():
-    print("Monitorowanie Spotify rozpoczęte (Auto-Next)...")
+    print("Monitorowanie Spotify rozpoczęte (Tryb Cichy + Auto-Next)...")
     print("------------------------------------------------")
 
     while True:
@@ -76,7 +86,8 @@ def main():
             if current_title:
                 print(f"[{time.strftime('%H:%M:%S')}] Widzę okno: {current_title}")
 
-                if current_title in AD_TITLES or "Reklama" in current_title:
+                
+                if "-" not in current_title:
                     restart_spotify()
             else:
                 print(f"[{time.strftime('%H:%M:%S')}] Czekam na okno Spotify...")
