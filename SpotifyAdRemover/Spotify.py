@@ -3,8 +3,8 @@ import os
 import psutil
 import win32gui
 import win32process
-import win32api  
-import win32con  
+import win32api
+import win32con
 
 
 AD_TITLES = ["Spotify", "Advertisement", "Reklama", ""] 
@@ -16,15 +16,12 @@ def get_spotify_title():
     found_windows = []
 
     def callback(hwnd, windows):
-       
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         try:
             proc = psutil.Process(pid)
-            
             if proc.name() == "Spotify.exe":
                 title = win32gui.GetWindowText(hwnd)
                 is_visible = win32gui.IsWindowVisible(hwnd)
-                
                 
                 if is_visible and title != "":
                     windows.append(title)
@@ -33,7 +30,6 @@ def get_spotify_title():
             pass
     
     win32gui.EnumWindows(callback, found_windows)
-    
     
     if found_windows:
         best_match = max(found_windows, key=len)
@@ -61,17 +57,16 @@ def restart_spotify():
         
         time.sleep(5) 
         
-        print("--- Próba wznowienia odtwarzania (Symulacja Play/Pause) ---")
+        print("--- Przełączanie na następny utwór (Next Track) ---")
         
-        win32api.keybd_event(win32con.VK_MEDIA_PLAY_PAUSE, 0, 0, 0)
-        win32api.keybd_event(win32con.VK_MEDIA_PLAY_PAUSE, 0, win32con.KEYEVENTF_KEYUP, 0)
+        win32api.keybd_event(win32con.VK_MEDIA_NEXT_TRACK, 0, 0, 0)
+        win32api.keybd_event(win32con.VK_MEDIA_NEXT_TRACK, 0, win32con.KEYEVENTF_KEYUP, 0)
 
     except FileNotFoundError:
         print(f"BŁĄD: Nie znaleziono pliku pod ścieżką: {SPOTIFY_PATH}")
-        print("Sprawdź czy ścieżka do Spotify.exe jest poprawna!")
 
 def main():
-    print("Monitorowanie Spotify rozpoczęte (Auto-Start Muzyki)...")
+    print("Monitorowanie Spotify rozpoczęte (Auto-Next)...")
     print("------------------------------------------------")
 
     while True:
@@ -84,13 +79,12 @@ def main():
                 if current_title in AD_TITLES or "Reklama" in current_title:
                     restart_spotify()
             else:
-                
-                print(f"[{time.strftime('%H:%M:%S')}] Nie wykryto aktywnego okna. Upewnij się, że Spotify jest zmaksymalizowane.")
+                print(f"[{time.strftime('%H:%M:%S')}] Czekam na okno Spotify...")
 
             time.sleep(1.5)
             
         except Exception as e:
-            print(f"Wystąpił błąd pętli głównej: {e}")
+            print(f"Wystąpił błąd: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
