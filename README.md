@@ -2,14 +2,13 @@
 
   <img src="cat.png" alt="Logo" width="120" height="120" />
 
-  # 🐱 Spotify Ads Skipper
+  # Spotify Ads Skipper
   
   **Your music, uninterrupted. Lightweight, fast, and invisible.**
-
+  
+  ![Spotify](https://img.shields.io/badge/Spotify-1ED760?style=for-the-badge&logo=spotify&logoColor=white)
   ![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python)
-  ![Platform](https://img.shields.io/badge/Platform-Windows-win?style=for-the-badge&logo=windows)
-  ![Status](https://img.shields.io/badge/Status-Stable-green?style=for-the-badge)
-
+  ![Platform](https://img.shields.io/badge/Platform-Windows-win?style=for-the-badge&logo=windows) 
 </div>
 
 ---
@@ -36,8 +35,8 @@ Unlike complex blockers that inject code, this tool works on a simple yet effect
 1.  Download `Spotify-Ads-Skipper.exe`.
 2.  Place it in a folder of your choice (e.g., Documents).
 3.  **Enable Auto-Start:**
-    * Download the `install.ps1` script and place it in the **same folder** as the `.exe`.
-    * Right-click `install.ps1` and select **"Run with PowerShell"**.
+    * Download the `autostart_windows.ps1` script and place it in the **same folder** as the `.exe`.
+    * Right-click `autostart_windows.ps1` and select **"Run with PowerShell"**.
     * Done! A shortcut has been added to your Windows Startup folder.
 
 ### Method 2: For Developers (Source Code)
@@ -46,7 +45,7 @@ If you want to run it from Python or modify the code:
 
 1.  Clone the repository:
     ```bash
-    git clone [https://github.com/your-username/Spotify-Ads-Skipper.git](https://github.com/your-username/Spotify-Ads-Skipper.git)
+    git clone [https://github.com/DEV-industry/Spotify-Ads-Skipper.git](https://github.com/DEV-industry/Spotify-Ads-Skipper.git)
     ```
 2.  Install required libraries:
     ```bash
@@ -54,7 +53,7 @@ If you want to run it from Python or modify the code:
     ```
 3.  Run the script:
     ```bash
-    python spotify_adblock.py
+    python Spotify.py
     ```
 
 ---
@@ -66,6 +65,21 @@ Spotify-Ads-Skipper/
 ├── dist/
 │   └── Spotify-Ads-Skipper.exe  # Compiled application
 ├── cat.ico                      # Our awesome logo
-├── install.ps1                  # Auto-start installation script
-├── spotify_adblock.py           # Main source code
+├── autostart_windows.ps1        # Auto-start installation script
+├── Spotify.py                   # Main source code
 └── README.md                    # This file
+
+```
+
+---
+
+## ⚠️ Disclaimer
+
+This project was created for educational purposes to demonstrate Windows automation using Python (specifically `win32gui`, `subprocess`, and `psutil` libraries).
+
+The author does not encourage blocking ads on services you enjoy. If you love Spotify, please consider purchasing Premium to support the artists.
+
+---
+<div align="center">
+  Made with ❤️ and 🐱 ~ DEV
+</div>
