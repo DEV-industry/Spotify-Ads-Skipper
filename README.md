@@ -1,8 +1,9 @@
 <div align="center">
 
-  <img src="cat.png" alt="Logo" width="120" height="120" />
+  <img src="photos/cat.png" alt="Logo" width="120" height="120" />
 
   # Spotify Ads Skipper
+  ![Licznik odwiedzin](https://komarev.com/ghpvc/?username=DEV-industry-Spotify-Ads-Skipper&label=VIEWS&style=for-the-badge&color=green)
   
   **Your music, uninterrupted. Lightweight, fast, and invisible.**
   
@@ -18,6 +19,12 @@
 **Spotify Ads Skipper** is a smart background utility for Windows that automatically detects and skips ads in the Spotify desktop application.
 
 Unlike complex blockers that inject code, this tool works on a simple yet effective principle: analyzing the window title. When an ad is detected, it instantly restarts Spotify in a minimized state and forces the next track to play, ensuring your music keeps flowing without interruption.
+
+<br><br>
+<div align="center">
+  <img src="photos/background.png" alt="Spotify Screenshot" width="60%">
+</div>
+<br><br>
 
 ### ✨ Key Features
 
