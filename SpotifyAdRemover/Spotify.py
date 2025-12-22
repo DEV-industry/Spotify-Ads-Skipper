@@ -11,6 +11,8 @@ import subprocess
 USER_NAME = os.getlogin()
 SPOTIFY_PATH = f"C:\\Users\\{USER_NAME}\\AppData\\Roaming\\Spotify\\Spotify.exe"
 
+WHITELISTED_TITLES = ["Spotify", "Spotify Free", "Spotify Premium"]
+
 def get_spotify_title():
     
     found_windows = []
@@ -37,7 +39,7 @@ def get_spotify_title():
     return None
 
 def restart_spotify():
-    print("\n!!! --- Wykryto reklamę (brak myślnika)! Restartowanie w tle... --- !!!\n")
+    print("\n!!! --- Wykryto reklamę! Restartowanie w tle... --- !!!\n")
     
     
     for proc in psutil.process_iter(['pid', 'name']):
@@ -51,17 +53,13 @@ def restart_spotify():
     
     
     try:
-        
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags = subprocess.STARTF_USESHOWWINDOW
-        
         startup_info.wShowWindow = win32con.SW_SHOWMINNOACTIVE 
-        
         
         subprocess.Popen([SPOTIFY_PATH, "--minimized"], startupinfo=startup_info)
         
         print("--- Spotify uruchomione w tle ---")
-        
         
         time.sleep(5) 
         
@@ -76,7 +74,7 @@ def restart_spotify():
         print(f"BŁĄD uruchamiania: {e}")
 
 def main():
-    print("Monitorowanie Spotify rozpoczęte (Tryb Cichy + Auto-Next)...")
+    print("Monitorowanie Spotify rozpoczęte (Fix dla Pauzy)...")
     print("------------------------------------------------")
 
     while True:
@@ -84,13 +82,17 @@ def main():
             current_title = get_spotify_title()
             
             if current_title:
-                print(f"[{time.strftime('%H:%M:%S')}] Widzę okno: {current_title}")
-
-                
+               
                 if "-" not in current_title:
-                    restart_spotify()
-            else:
-                print(f"[{time.strftime('%H:%M:%S')}] Czekam na okno Spotify...")
+                    
+                    if current_title not in WHITELISTED_TITLES:
+                        print(f"[{time.strftime('%H:%M:%S')}] REKLAMA WYKRYTA: '{current_title}'")
+                        restart_spotify()
+                    else:
+                        
+                        pass 
+                        
+            
 
             time.sleep(1.5)
             
