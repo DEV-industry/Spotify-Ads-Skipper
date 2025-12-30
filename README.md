@@ -42,8 +42,8 @@ Unlike complex blockers that inject code, this tool works on a simple yet effect
 1.  Download `Spotify-Ads-Skipper.exe`.
 2.  Place it in a folder of your choice (e.g., Documents).
 3.  **Enable Auto-Start:**
-    * Download the `autostart_windows.ps1` script and place it in the **same folder** as the `.exe`.
-    * Right-click `autostart_windows.ps1` and select **"Run with PowerShell"**.
+    * Download the `autostart_windows.bat` script and place it in the **same folder** as the `.exe`.
+    * Right-click `autostart_windows.bat` and select **"Run"**.
     * Done! A shortcut has been added to your Windows Startup folder.
 
 ### Method 2: For Developers (Source Code)
@@ -72,6 +72,7 @@ Spotify-Ads-Skipper/
 ├── dist/
 │   └── Spotify-Ads-Skipper.exe  # Compiled application
 ├── cat.ico                      # Our awesome logo
+├── autostart_windows.bat        # Auto-start installation helper script
 ├── autostart_windows.ps1        # Auto-start installation script
 ├── Spotify.py                   # Main source code
 └── README.md                    # This file
