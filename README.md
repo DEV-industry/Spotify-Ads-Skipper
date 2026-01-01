@@ -12,6 +12,9 @@
   ![Platform](https://img.shields.io/badge/Platform-Windows-win?style=for-the-badge&logo=windows) 
 </div>
 
+> [!TIP]
+> **Strona projektu:** [spotify-skipper-web.vercel.app](https://spotify-skipper-web.vercel.app/)
+
 ---
 
 ## 📖 About The Project
