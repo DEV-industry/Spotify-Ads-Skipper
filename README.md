@@ -13,7 +13,7 @@
 </div>
 
 > [!TIP]
-> **Strona projektu:** [spotify-skipper-web.vercel.app](https://spotify-skipper-web.vercel.app/)
+> **Project Website:** [spotify-skipper-web.vercel.app](https://spotify-skipper-web.vercel.app/)
 
 ---
 
