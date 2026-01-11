@@ -5,7 +5,7 @@ a = Analysis(
     ['Spotify.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('ad_hosts.txt', '.'), ('cat.ico', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
