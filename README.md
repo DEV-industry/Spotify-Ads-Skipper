@@ -5,7 +5,7 @@
   # Spotify Ads Skipper
   ![Licznik odwiedzin](https://komarev.com/ghpvc/?username=DEV-industry-Spotify-Ads-Skipper&label=VIEWS&style=for-the-badge&color=green)
   
-    **Your music, uninterrupted. Seamless host-based ad blocking.**
+  **Your music, uninterrupted. Seamless host-based ad blocking.**
   
   ![Spotify](https://img.shields.io/badge/Spotify-1ED760?style=for-the-badge&logo=spotify&logoColor=white)
   ![Python](https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python)
@@ -32,11 +32,11 @@ Unlike the previous version that restarted Spotify, this new version uses **Host
 
 ### ✨ Key Features
 
-* � **Host Blocking:** Blocks ads at the network level by preventing connection to ad servers.
+* ⛔ **Host Blocking:** Blocks ads at the network level by preventing connection to ad servers.
 * 🎧 **Seamless Experience:** **No restarts**, no muting, no interruptions. Just continuous music.
-* � **All-in-One:** Single `.exe` file with embedded block list and icon.
+* 💾 **All-in-One:** Single `.exe` file with embedded block list and icon.
 * 🛡️ **Safe & Clean:** Automatically restores your system's default `hosts` file when you close the app.
-* 🚀 **Invisible Operation:** Runs silently in the system tray.
+* ⚡ **Invisible Operation:** Runs silently in the system tray.
 
 ---
 
