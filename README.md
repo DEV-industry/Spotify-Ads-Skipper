@@ -45,7 +45,7 @@ Unlike the previous version that restarted Spotify, this new version uses **Host
 ### Method 1: The Easy Way (Exe File)
 
 1.  Open the `dist` folder.
-2.  You will find `Spotify.exe` (or `Spotify-Ads-Skipper.exe`).
+2.  You will find `Spotify-Ads-Skipper.exe`
 3.  **Run as Administrator:** The app needs permissions to update the `hosts` file.
 4.  **Done:** The app runs in the background (check the cat icon in your system tray).
 5.  **Auto-Start (Optional):**
@@ -76,7 +76,7 @@ If you want to run it from Python or modify the code:
 ```text
 Spotify-Ads-Skipper/
 ├── dist/
-│   ├── Spotify.exe              # All-in-One compiled application
+│   ├── Spotify-Ads-Skipper.exe  # All-in-One compiled application
 │   ├── autostart_windows.bat    # Auto-start helper
 │   └── autostart_windows.ps1    # Auto-start script
 ├── SpotifyAdRemover/
