@@ -154,6 +154,18 @@ if __name__ == "__main__":
         script_path = os.path.abspath(__file__)
         script_dir = os.path.dirname(script_path)
 
+    if "--cleanup" in sys.argv:
+        if not is_admin():
+            try:
+                params = f'"{script_path}" --cleanup'
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, script_dir, 0)
+                sys.exit(0)
+            except Exception:
+                sys.exit(1)
+        
+        restore_hosts()
+        sys.exit(0)
+
     if not is_admin():
         print("Requesting admin privileges...")
         try:
