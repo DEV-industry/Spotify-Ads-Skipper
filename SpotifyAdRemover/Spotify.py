@@ -82,7 +82,7 @@ def update_hosts():
     if not new_hosts_content:
         log_debug("New hosts content is empty/None.")
         if tray_icon:
-            tray_icon.notify("Błąd odczytu ad_hosts.txt.", "Spotify Skipper")
+            tray_icon.notify("Error reading ad_hosts.txt.", "Spotify Skipper")
         return
 
     try:
@@ -116,7 +116,7 @@ def update_hosts():
     except Exception as e:
         log_debug(f"Error updating hosts: {e}")
         if tray_icon:
-            tray_icon.notify(f"Błąd zapisu hosts: {e}", "Spotify Skipper")
+            tray_icon.notify(f"Error writing hosts: {e}", "Spotify Skipper")
 
 def restore_hosts():
     
@@ -143,7 +143,7 @@ def on_quit(icon, item):
 
 def construct_menu():
     return Menu(
-        item("Zamknij", on_quit)
+        item("Close", on_quit)
     )
 
 if __name__ == "__main__":
@@ -188,7 +188,7 @@ if __name__ == "__main__":
             import time
             time.sleep(2) 
             if tray_icon:
-                tray_icon.notify("Blokowanie reklam aktywne.", "Spotify Skipper")
+                tray_icon.notify("Ad blocking active.", "Spotify Skipper")
                 
         threading.Thread(target=notify_start).start()
         
@@ -200,6 +200,6 @@ if __name__ == "__main__":
             f.write(f"Crash Error: {e}")
         
         try:
-            ctypes.windll.user32.MessageBoxW(0, f"Aplikacja napotkala blad: {e}", "Spotify Skipper Error", 0)
+            ctypes.windll.user32.MessageBoxW(0, f"Application encountered an error: {e}", "Spotify Skipper Error", 0)
         except:
             pass
