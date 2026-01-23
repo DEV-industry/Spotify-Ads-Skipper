@@ -32,11 +32,11 @@ Unlike the previous version that restarted Spotify, this new version uses **Host
 
 ### ✨ Key Features
 
-* ⛔ **Host Blocking:** Blocks ads at the network level by preventing connection to ad servers.
-* 🎧 **Seamless Experience:** **No restarts**, no muting, no interruptions. Just continuous music.
-* 💾 **All-in-One:** Single `.exe` file with embedded block list and icon.
-* 🛡️ **Safe & Clean:** Automatically restores your system's default `hosts` file when you close the app.
-* ⚡ **Invisible Operation:** Runs silently in the system tray.
+*  **Host Blocking:** Blocks ads at the network level by preventing connection to ad servers.
+*  **Seamless Experience:** **No restarts**, no muting, no interruptions. Just continuous music.
+*  **All-in-One:** Single `.exe` file with embedded block list and icon.
+*  **Safe & Clean:** Automatically restores your system's default `hosts` file when you close the app.
+*  **Invisible Operation:** Runs silently in the system tray.
 
 ---
 
