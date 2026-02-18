@@ -1,5 +1,4 @@
 <div align="center">
-
   <img src="photos/cat.png" alt="Logo" width="120" height="120" />
 
   # Spotify Ads Skipper
