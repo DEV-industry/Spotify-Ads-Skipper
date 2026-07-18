@@ -207,18 +207,8 @@ The author does not encourage blocking ads on services you enjoy. If you love Sp
 
 ---
 
-## Star history
-
-If this tool saved your ears, consider leaving a star - it genuinely helps other people find the project.
-
 <div align="center">
-  <a href="https://star-history.com/#DEV-industry/Spotify-Ads-Skipper&Date">
-    <img src="https://api.star-history.com/svg?repos=DEV-industry/Spotify-Ads-Skipper&type=Date" alt="Star history chart" width="70%" />
-  </a>
-</div>
-
----
-
-<div align="center">
+  If this tool saved your ears, consider leaving a star - it genuinely helps other people find the project.
+  <br /><br />
   Built and maintained by DEV. Licensed under MIT.
 </div>
