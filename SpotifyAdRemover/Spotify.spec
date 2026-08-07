@@ -6,22 +6,16 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('cat.ico', '.')],
-    # comtypes builds its interface wrappers at run time, so PyInstaller's
-    # static scan never sees pycaw's COM imports. psutil and the pywin32
-    # modules are reached only through lazy imports for the same reason.
+    # psutil and the pywin32 modules are reached only through lazy imports, so
+    # PyInstaller's static scan never sees them.
     hiddenimports=[
-        'comtypes',
-        'comtypes.client',
-        'comtypes.stream',
-        'pycaw',
-        'pycaw.pycaw',
         'psutil',
         'win32gui',
         'win32process',
         'win32api',
         # pywin32 imports this at run time and PyInstaller never sees it.
         'win32timezone',
-        # Seamless mode: local CA generation and leaf signing.
+        # Local CA generation and leaf signing.
         'cryptography',
         'cryptography.x509',
         'cryptography.hazmat.primitives.serialization',

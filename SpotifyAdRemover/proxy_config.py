@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 INTERNET_SETTINGS = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 
 # Our own corner of the registry, used to park a PAC URL that was already
-# configured when seamless mode came up so disable() can put it back.
+# configured when the proxy came up so disable() can put it back.
 OWN_KEY = r"Software\SpotifyAdsSkipper"
 SAVED_VALUE = "PreviousAutoConfigURL"
 

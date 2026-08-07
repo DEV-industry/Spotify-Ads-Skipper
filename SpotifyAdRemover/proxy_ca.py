@@ -90,7 +90,7 @@ key_permissions_ok = True
 # certutil is unhurried - measured at 13 seconds for a single addstore on an
 # ordinary desktop, and it consults the network on the way. The old 30 second
 # limit was close enough to that to fail for no reason on a busy machine, and a
-# timeout here reads to the user as "seamless mode is broken".
+# timeout here reads to the user as "the app is broken".
 CERTUTIL_TIMEOUT = 120
 
 crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
@@ -325,8 +325,8 @@ def _store_key(key):
         sealed = _dpapi_protect(pem)
     except Exception:
         sealed = None
-    # Falling back to plaintext keeps seamless mode working on a machine where
-    # DPAPI is broken; the ACL and the name constraints still apply.
+    # Falling back to plaintext keeps the app working on a machine where DPAPI
+    # is broken; the ACL and the name constraints still apply.
     _write_private(CA_KEY, (KEY_MAGIC + sealed) if sealed else pem)
 
 

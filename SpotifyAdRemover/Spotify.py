@@ -1,23 +1,24 @@
 """Spotify Ads Skipper - tray application.
 
-Spotify delivers three kinds of advertising through three different paths, so
-there are three mechanisms:
+The point of this app is that audio ads never play. Not muted, not skipped
+after the fact - never fetched, so the next track starts immediately.
 
-  Display ads (home banners, takeovers, video overlays) ship inside the client's
-  own UI bundle -> xpui_patch hides them there.
+Audio ads are requested by the client's native core from /ads/v3/ads and a
+handful of sibling paths on the same host as everything else. ad_proxy answers
+those paths with a 404 and forwards the rest untouched, so the client treats
+the slot as empty and moves straight on. That is the whole product; there is no
+second, weaker mode to fall back to.
 
-  Audio ads are fetched by the native core from /ads/v3/ads on the same host as
-  everything else. Blocking that request makes the client treat the slot as
-  empty and continue straight to the next track, with no gap -> ad_proxy, but
-  only in Seamless mode, which the user must switch on deliberately.
+Display ads (home banners, takeovers, video overlays) travel a different route
+entirely - they ship inside the client's own UI bundle - so xpui_patch hides
+them there. Two ad delivery paths, two mechanisms, both always on.
 
-  With Seamless mode off, audio ads still play and are merely muted -> ad_watch.
-
-Seamless mode is opt-in because it needs a local certificate authority in the
-user's trust store. That CA is generated per installation and never shipped: a
-CA baked into the executable would put one private key on every user's machine,
-letting anyone who downloaded the app impersonate any HTTPS site for all the
-others.
+Reading request paths inside HTTPS means terminating TLS, which needs a
+certificate authority in the user's trust store. That CA is generated per
+installation and never shipped: a CA baked into the executable would put one
+private key on every user's machine, letting anyone who downloaded the app
+impersonate Spotify for all the others. Because the app cannot work without it,
+consent is asked once on first run - and refusing simply exits.
 """
 
 import atexit
@@ -32,10 +33,8 @@ from PIL import Image, ImageDraw
 
 import spotify_env
 import xpui_patch
-from ad_watch import AdWatcher
 
 tray_icon = None
-watcher = None
 proxy = None
 pac_server = None
 
@@ -43,26 +42,27 @@ CONFIG_PATH = os.path.join(
     os.environ.get("APPDATA", ""), "SpotifyAdsSkipper", "settings.json"
 )
 
-SEAMLESS_WARNING = (
-    "Seamless mode blocks Spotify's ad requests outright, so tracks run "
-    "back-to-back with no silence.\n\n"
-    "To read those requests it must decrypt Spotify's HTTPS traffic, which "
-    "requires installing a local certificate authority into your user "
-    "certificate store.\n\n"
+FIRST_RUN_NOTICE = (
+    "Spotify Ads Skipper blocks Spotify's ad requests outright, so tracks run "
+    "back-to-back with no ad and no silence.\n\n"
+    "To read those requests it has to decrypt Spotify's HTTPS traffic, which "
+    "means installing a local certificate authority into your user "
+    "certificate store. This is how the app works - there is no version of it "
+    "that skips this step.\n\n"
     "What that means:\n"
     "- The CA is generated on THIS machine and never leaves it.\n"
     "- It can only vouch for spotify.com, scdn.co and spotifycdn.com. It "
     "cannot be used against your bank, your email or any other site.\n"
     "- Traffic to those Spotify domains is decrypted on this machine while "
-    "the mode is on. That includes Spotify pages open in your browser, so "
-    "your Spotify login travels through it too.\n"
+    "the app runs. That includes Spotify pages open in your browser, so your "
+    "Spotify login travels through it too.\n"
     "- Everything else connects directly and is never touched.\n"
-    "- The CA stays installed until you turn this mode off or uninstall the "
-    "app - not just while the app is running.\n\n"
-    "A certificate authority is still a sensitive thing to install. If you are "
-    "not comfortable with that, leave this off - ads will simply be muted "
-    "instead.\n\n"
-    "Enable Seamless mode?"
+    "- The CA stays installed until you remove it from the tray menu or "
+    "uninstall the app - not just while the app is running.\n\n"
+    "A certificate authority is a sensitive thing to install. If you are not "
+    "comfortable with that, cancel: nothing is installed and the app "
+    "closes.\n\n"
+    "Press OK to set it up and start blocking ads."
 )
 
 
@@ -98,6 +98,14 @@ def redact(text):
     return text
 
 
+# The proxy answers requests on a thread each, and they all log. Without this
+# their writes interleave: observed in a real run as four entries whose tails
+# landed on a line of their own ("config"), leaving the log to be read as if
+# something had gone wrong when nothing had. It is the only diagnostic there
+# is now that a failure means ads simply play, so it has to be trustworthy.
+_log_lock = threading.Lock()
+
+
 def log_debug(message):
     try:
         from datetime import datetime
@@ -106,16 +114,21 @@ def log_debug(message):
         # installed somewhere read-only would otherwise log nowhere at all.
         os.makedirs(DATA_DIR, exist_ok=True)
         path = os.path.join(DATA_DIR, "debug_log.txt")
-        message = redact(message)
-        # Rotate rather than grow without bound: this runs for as long as the
-        # machine is on, and a stale multi-megabyte log is useless for support.
-        try:
-            if os.path.getsize(path) > LOG_MAX_BYTES:
-                os.replace(path, path + ".1")
-        except OSError:
-            pass
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write("[%s] %s\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), message))
+        line = "[%s] %s\n" % (
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), redact(message),
+        )
+        with _log_lock:
+            # Rotate rather than grow without bound: this runs for as long as
+            # the machine is on, and a stale multi-megabyte log is useless for
+            # support. Inside the lock so two threads cannot both rotate and
+            # lose the file one of them was about to append to.
+            try:
+                if os.path.getsize(path) > LOG_MAX_BYTES:
+                    os.replace(path, path + ".1")
+            except OSError:
+                pass
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(line)
     except Exception:
         pass
 
@@ -137,8 +150,28 @@ def save_config(config):
         pass
 
 
-def seamless_enabled():
-    return bool(load_config().get("seamless", False))
+def has_consented():
+    """Whether the user has already agreed to the local CA.
+
+    "seamless" is the key an earlier build used for the same agreement back
+    when blocking was an optional mode, so an existing yes is honoured rather
+    than asked for a second time. It is consulted only in the absence of an
+    answer to the question actually being asked now - falling back to it
+    whenever "consented" is falsy would let a stale legacy yes override a
+    deliberate no.
+    """
+    config = load_config()
+    if "consented" in config:
+        return bool(config["consented"])
+    return bool(config.get("seamless"))
+
+
+def record_consent(given):
+    config = load_config()
+    config["consented"] = bool(given)
+    # Drop the superseded key so the two cannot drift apart later.
+    config.pop("seamless", None)
+    save_config(config)
 
 
 def create_image():
@@ -158,22 +191,38 @@ def notify(message, title="Spotify Skipper"):
             pass
 
 
+MB_OKCANCEL = 0x01
 MB_YESNO = 0x04
 MB_ICONWARNING = 0x30
 MB_SETFOREGROUND = 0x10000
 MB_TOPMOST = 0x40000
+IDOK = 1
 IDYES = 6
+
+# SETFOREGROUND and TOPMOST are not cosmetic on either of these: launched from
+# a tray app with no owner window, a dialog can otherwise come up behind
+# everything and without focus, which looks exactly like one that ignores
+# clicks.
+_DIALOG_FLAGS = MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
 
 
 def confirm(text, title="Spotify Skipper"):
-    """Ask a yes/no question.
+    """Ask a yes/no question."""
+    return ctypes.windll.user32.MessageBoxW(
+        0, text, title, MB_YESNO | _DIALOG_FLAGS
+    ) == IDYES
 
-    SETFOREGROUND and TOPMOST are not cosmetic here: launched from a tray app
-    with no owner window, the dialog can otherwise come up behind everything and
-    without focus, which looks exactly like a dialog that ignores clicks.
+
+def accepted(text, title="Spotify Skipper"):
+    """Ask for OK/Cancel on something the user is about to have done to them.
+
+    Separate from confirm() because the two questions are not the same shape.
+    Yes/No suits a choice; OK/Cancel suits a gate, where Cancel means "stop,
+    change nothing" rather than "no thanks, carry on without it".
     """
-    flags = MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST
-    return ctypes.windll.user32.MessageBoxW(0, text, title, flags) == IDYES
+    return ctypes.windll.user32.MessageBoxW(
+        0, text, title, MB_OKCANCEL | _DIALOG_FLAGS
+    ) == IDOK
 
 
 # -- display ads -----------------------------------------------------------
@@ -203,15 +252,20 @@ def sync_patch():
             spotify_env.start_spotify()
 
 
-# -- seamless mode ---------------------------------------------------------
+# -- audio ads: the proxy --------------------------------------------------
 
-def start_seamless():
+def start_blocking():
     """Bring up the proxy, PAC server and routing. Returns (ok, message).
 
     Every failure path tears down what it already built, CA trust included.
     Half-finished state here is the worst outcome available: a trusted root
-    certificate installed for a mode that never came up, with no obvious way
+    certificate installed for a proxy that never came up, with no obvious way
     for the user to get rid of it again.
+
+    untrust_ca is deliberately conditional on trusted_now. A CA that was
+    already in the store belongs to a working install whose proxy merely lost a
+    port race this time; pulling it out would turn a retryable failure into a
+    fresh certutil run - and another chance to fail - on the next start.
     """
     global proxy, pac_server
 
@@ -265,12 +319,12 @@ def start_seamless():
         if not ok:
             raise RuntimeError(message)
     except Exception as exc:
-        log_debug("Seamless startup failed: %s" % exc)
-        stop_seamless(untrust_ca=trusted_now)
-        return False, "Seamless mode could not start: %s" % exc
+        log_debug("Ad blocking failed to start: %s" % exc)
+        stop_blocking(untrust_ca=trusted_now)
+        return False, "Ads are NOT being blocked: %s" % exc
 
-    log_debug("Seamless mode on (%s)" % pac_server.url)
-    return True, "Seamless mode on - ads are dropped, not muted."
+    log_debug("Blocking ads (%s)" % pac_server.url)
+    return True, "Blocking ads - they will not play at all."
 
 
 def reconcile_routing():
@@ -280,9 +334,14 @@ def reconcile_routing():
     teardown, so AutoConfigURL can outlive the app. A stale entry points every
     application that reads a PAC at a port nobody is listening on - and worse,
     at a port anything on the machine is then free to claim.
+
+    Run unconditionally, before setting the routing up again. It looks like
+    wasted work now that blocking is always on, but it is what keeps a PAC that
+    belongs to someone else - a corporate one, a VPN client's - correctly
+    parked and restored: disable() puts it back and forgets its own copy, then
+    enable() saves it again from a clean slate. Skipping this leaves whatever a
+    crashed run happened to record as "the previous PAC".
     """
-    if seamless_enabled():
-        return  # About to be set up again properly.
     try:
         import proxy_config
 
@@ -319,11 +378,11 @@ def ensure_spotify_routed():
         spotify_env.start_spotify()
         return True
 
-    log_debug("Could not restart Spotify; seamless mode will not apply yet.")
+    log_debug("Could not restart Spotify; its traffic is not routed yet.")
     return False
 
 
-def stop_seamless(untrust_ca=True):
+def stop_blocking(untrust_ca=True):
     """Tear everything down. Must run on every exit path."""
     global proxy, pac_server
 
@@ -349,7 +408,7 @@ def stop_seamless(untrust_ca=True):
         except Exception as exc:
             log_debug("Could not remove CA: %s" % exc)
 
-    log_debug("Seamless mode off")
+    log_debug("Blocking stopped")
 
 
 def guarded(name):
@@ -372,40 +431,6 @@ def guarded(name):
     return decorate
 
 
-@guarded("Seamless mode")
-def _toggle_seamless_worker(icon):
-    config = load_config()
-    if config.get("seamless"):
-        stop_seamless()
-        config["seamless"] = False
-        save_config(config)
-        notify("Seamless mode off. Audio ads will be muted instead.")
-    else:
-        if not confirm(SEAMLESS_WARNING):
-            return
-        ok, message = start_seamless()
-        config["seamless"] = bool(ok)
-        save_config(config)
-        notify(message)
-        if ok and spotify_env.is_spotify_running():
-            spotify_env.stop_spotify()
-            spotify_env.start_spotify()
-    icon.update_menu()
-
-
-def on_toggle_seamless(icon, _item):
-    """Hand the work to a thread and return at once.
-
-    While a tray menu is up, Windows holds a mouse capture for it. A modal
-    dialog opened straight from the callback appears but never receives the
-    clicks - it just sits there. Returning immediately lets the menu close and
-    release the capture, and the dialog then behaves normally on its own thread.
-    The same return also keeps the tray responsive during the slow parts (key
-    generation, certutil, restarting Spotify).
-    """
-    threading.Thread(target=_toggle_seamless_worker, args=(icon,), daemon=True).start()
-
-
 # -- tray ------------------------------------------------------------------
 
 @guarded("Restore")
@@ -424,8 +449,9 @@ def _restore_worker():
 
 
 def on_restore(icon, _item):
-    # Off the callback thread for the same reason as the seamless toggle:
-    # stopping and relaunching Spotify takes seconds and would hang the tray.
+    # Off the callback thread: while a tray menu is up Windows holds a mouse
+    # capture for it, so anything slow - or any dialog - blocks with the menu
+    # still owning the mouse. Stopping and relaunching Spotify takes seconds.
     threading.Thread(target=_restore_worker, daemon=True).start()
 
 
@@ -438,16 +464,30 @@ _shut_down = threading.Event()
 
 
 def shutdown():
-    """Leave nothing behind: no routing, no mute, no CA."""
+    """Leave no routing behind - but only routing this process put there.
+
+    Registered with atexit, so it runs on every exit path there is, including
+    `--selftest`. That flag starts nothing, and tearing down regardless meant a
+    diagnostic run reached into the live instance's registry and cleared its
+    AutoConfigURL: ads came back silently, and the app that was actually
+    running had no idea. Measured, not theorised - a planted AutoConfigURL was
+    gone after one --selftest.
+
+    proxy and pac_server are the honest record of what this process owns. Both
+    are None here when blocking never started, and start_blocking() has already
+    cleaned up after itself when it started and then failed.
+
+    The CA deliberately stays either way: it is what the next launch reuses,
+    and pulling a root certificate in and out of the store on every logon is
+    both slow and a good way to end up with it half-removed. Uninstalling, or
+    "Remove local certificate", is what gets rid of it.
+    """
     if _shut_down.is_set():
         return
     _shut_down.set()
-    if watcher:
-        watcher.stop()
-        watcher.join(timeout=3)
-    if load_config().get("seamless"):
-        # Routing must go even though the setting stays on for next launch.
-        stop_seamless(untrust_ca=False)
+    if proxy is None and pac_server is None:
+        return
+    stop_blocking(untrust_ca=False)
 
 
 def shutdown_quietly():
@@ -464,8 +504,8 @@ def start_status_refresher(icon):
     pystray's Windows backend builds the popup menu once and caches the handle,
     so a callable item's text is only re-evaluated when update_menu() is called.
     Without this the status is frozen at whatever was true the instant the icon
-    was created - which is before the startup thread has brought seamless mode
-    up, and therefore reads "FAILED" forever even though everything works.
+    was created - which is before the startup thread has brought the proxy up,
+    and therefore reads "NOT BLOCKING" forever even though everything works.
     """
 
     def loop():
@@ -482,26 +522,27 @@ def start_status_refresher(icon):
 
 
 def status_text(_item=None):
-    if seamless_enabled():
-        # Report the parts separately. A dead PAC server leaves Windows unable
-        # to fetch the routing rules, so Spotify connects directly and the proxy
-        # sits idle - which otherwise reads as a healthy "0 dropped" and hides
-        # the failure completely.
-        if proxy is None:
-            return "Status: seamless FAILED - proxy not running"
-        if not proxy.listening:
-            # The thread can be alive while owning no port at all.
-            return "Status: seamless FAILED - port %d is taken" % proxy.port
-        if pac_server is None or not pac_server.alive:
-            return "Status: seamless BROKEN - routing server down, restart the app"
-        if not proxy.blocked and not spotify_env.is_spotify_running():
-            # A zero here means "nothing has needed blocking yet", which reads
-            # exactly like a failure. Say why it is zero instead.
-            return "Status: seamless ready - Spotify is not running"
-        return "Status: seamless (%d ad requests dropped)" % (proxy.blocked,)
-    if watcher and watcher.ad_playing:
-        return "Status: muting an ad"
-    return "Status: muting mode (%d ads muted)" % (watcher.ads_muted if watcher else 0,)
+    """The one line that says whether the app is doing its job.
+
+    It carries more weight than it used to. There is no muting fallback any
+    more, so a failure here means ads play in full - and the parts are reported
+    separately because they fail separately. A dead PAC server in particular
+    leaves Windows unable to fetch the routing rules, so Spotify connects
+    directly and the proxy sits idle, which would otherwise read as a healthy
+    "0 dropped" and hide the failure completely.
+    """
+    if proxy is None:
+        return "Status: NOT BLOCKING - proxy not running"
+    if not proxy.listening:
+        # The thread can be alive while owning no port at all.
+        return "Status: NOT BLOCKING - port %d is taken" % proxy.port
+    if pac_server is None or not pac_server.alive:
+        return "Status: NOT BLOCKING - routing server down, restart the app"
+    if not proxy.blocked and not spotify_env.is_spotify_running():
+        # A zero here means "nothing has needed blocking yet", which reads
+        # exactly like a failure. Say why it is zero instead.
+        return "Status: ready - Spotify is not running"
+    return "Status: blocking (%d ad requests dropped)" % (proxy.blocked,)
 
 
 def ca_is_installed():
@@ -513,32 +554,49 @@ def ca_is_installed():
         return False
 
 
+REMOVE_CA_WARNING = (
+    "This removes the local certificate authority from your certificate "
+    "store.\n\n"
+    "Blocking ads depends on it, so the app will close. Nothing else is "
+    "undone: Spotify's interface stays patched, and starting the app again "
+    "asks for permission and sets up a fresh certificate.\n\n"
+    "Remove it and close?"
+)
+
+
 @guarded("Remove local CA")
-def _remove_ca_worker():
+def _remove_ca_worker(icon):
     import proxy_ca
 
-    if seamless_enabled():
-        stop_seamless(untrust_ca=False)
-        config = load_config()
-        config["seamless"] = False
-        save_config(config)
+    if not confirm(REMOVE_CA_WARNING):
+        return
+
+    stop_blocking(untrust_ca=False)
+    # Consent is withdrawn along with the certificate, so the next launch asks
+    # again rather than quietly reinstalling what was just deliberately removed.
+    record_consent(False)
+
     ok, message = proxy_ca.untrust()
     log_debug("Remove CA: %s (%s)" % (ok, message))
-    notify(message)
+    if not ok:
+        notify(message)
+        return
+
+    shutdown()
+    icon.stop()
 
 
 def on_remove_ca(icon, _item):
-    threading.Thread(target=_remove_ca_worker, daemon=True).start()
+    threading.Thread(target=_remove_ca_worker, args=(icon,), daemon=True).start()
 
 
 def construct_menu():
     return Menu(
         item(status_text, None, enabled=False),
         Menu.SEPARATOR,
-        item("Seamless mode (advanced)", on_toggle_seamless, checked=lambda _i: seamless_enabled()),
-        # Always reachable, not just while the mode is on. A CA can be left
-        # behind by a crash or a failed start-up, and without this the only way
-        # to get rid of it is certmgr.msc.
+        # Shown whenever a certificate is installed, including after a failed
+        # start-up that left one behind. Without it the only way to get rid of
+        # one is certmgr.msc, which is not a thing to ask of anybody.
         item("Remove local certificate", on_remove_ca, visible=lambda _i: ca_is_installed()),
         item("Restore original Spotify UI", on_restore),
         item("Close", on_quit),
@@ -549,8 +607,9 @@ def run_selftest():
     """Report whether each mechanism can actually run here.
 
     Frozen builds are the reason this exists: a dependency that imports fine
-    from source can still be missing from the bundle, and the watcher would
-    then fail silently rather than loudly. Users can run it to diagnose too.
+    from source can still be missing from the bundle, and the proxy would then
+    fail at the point where it is the only thing standing between the user and
+    a full-length ad. Users can run it to diagnose too.
     """
     lines = []
     ok = True
@@ -571,39 +630,13 @@ def run_selftest():
     probe("Spotify version", lambda: spotify_env.spotify_version() or "not found")
     probe("UI patch state", lambda: "patched" if xpui_patch.is_patched() else "not patched")
 
-    def audio():
-        import comtypes
-
-        comtypes.CoInitialize()
-        from ad_watch import _spotify_sessions
-        from pycaw.pycaw import AudioUtilities
-
-        total = len(AudioUtilities.GetAllSessions())
-        return "%d audio sessions visible (%d Spotify)" % (total, len(_spotify_sessions()))
-
-    probe("Audio muting (pycaw)", audio)
-
-    def window():
-        from ad_watch import spotify_window_title
-
-        # Deliberately not the title itself: this file gets attached to bug
-        # reports, and the title is whatever the user is listening to.
-        title = spotify_window_title()
-        if title is None:
-            return "no visible Spotify window"
-        return "readable, %d chars, music-shaped: %s" % (
-            len(title), " - " in title,
-        )
-
-    probe("Window title read", window)
-
-    def seamless_imports():
+    def proxy_imports():
         import ad_proxy  # noqa: F401
         import proxy_config  # noqa: F401
 
         return "proxy modules import"
 
-    probe("Seamless mode modules", seamless_imports)
+    probe("Proxy modules", proxy_imports)
 
     def crypto():
         import proxy_ca
@@ -616,7 +649,17 @@ def run_selftest():
             "restricted" if proxy_ca.key_permissions_ok else "COULD NOT RESTRICT",
         )
 
-    probe("Seamless mode crypto", crypto)
+    probe("CA and leaf signing", crypto)
+
+    def routing():
+        import proxy_ca
+        import proxy_config
+
+        return "CA trusted: %s, routing active: %s" % (
+            proxy_ca.is_trusted(), proxy_config.is_enabled(),
+        )
+
+    probe("Current install state", routing)
 
     lines.append("")
     lines.append("RESULT: %s" % ("all mechanisms available" if ok else "SOMETHING IS BROKEN"))
@@ -638,7 +681,7 @@ def run_selftest():
 def run_cleanup():
     """Uninstall hook: undo everything this app ever changed."""
     try:
-        stop_seamless()
+        stop_blocking()
     except Exception:
         pass
 
@@ -656,8 +699,8 @@ def run_cleanup():
 
     leftovers = [
         CONFIG_PATH,
-        # Taken the first time seamless mode stripped proxy keys out of
-        # Spotify's prefs; nothing else ever removes it.
+        # Taken the first time the proxy stripped proxy keys out of Spotify's
+        # prefs; nothing else ever removes it.
         os.path.join(os.environ.get("APPDATA", ""), "Spotify", "prefs.skipper-backup"),
     ]
     for path in leftovers:
@@ -681,8 +724,9 @@ _instance_handle = []
 def claim_single_instance():
     """Take a named mutex. False when another copy already holds it.
 
-    Two copies fight over everything that matters: both race for the proxy and
-    PAC ports, and both run a mute watcher that undoes the other's work.
+    Two copies fight over everything that matters: they race for the proxy and
+    PAC ports, and whichever loses tears down the routing the winner just set
+    up on its way out.
     """
     try:
         kernel32 = ctypes.windll.kernel32
@@ -708,7 +752,7 @@ def claim_single_instance():
 
 
 def main():
-    global tray_icon, watcher
+    global tray_icon
 
     if "--cleanup" in sys.argv:
         sys.exit(run_cleanup())
@@ -734,27 +778,47 @@ def main():
         )
         sys.exit(1)
 
-    tray_icon = Icon("SpotifySkipper", create_image(), "Spotify Skipper", construct_menu())
+    # Asked before anything is created or installed, and only once. Declining
+    # exits with the machine exactly as it was found - there is no reduced mode
+    # to fall back to, so carrying on regardless would mean an app that sits in
+    # the tray doing nothing.
+    if not has_consented():
+        if not accepted(FIRST_RUN_NOTICE):
+            log_debug("First-run consent declined; exiting without changes.")
+            sys.exit(0)
+        record_consent(True)
 
-    # The muting watcher is the fallback for when seamless mode is off; it
-    # costs nothing while no ad is playing, and in seamless mode no ad ever
-    # reaches playback for it to react to.
-    watcher = AdWatcher(log=log_debug)
-    watcher.start()
+    tray_icon = Icon("SpotifySkipper", create_image(), "Spotify Skipper", construct_menu())
 
     @guarded("Startup")
     def startup():
         reconcile_routing()
-        ok, message = sync_patch()
-        if seamless_enabled():
-            ok2, message2 = start_seamless()
-            if ok2:
-                # Spotify may have launched ahead of us and already given up on
-                # the proxy; this puts it right.
-                ensure_spotify_routed()
-            else:
-                log_debug("Seamless failed to start: %s" % message2)
-                message = message2
+        patched, patch_message = sync_patch()
+        if not patched:
+            log_debug("Display ads not blocked: %s" % patch_message)
+
+        ok, message = start_blocking()
+        if ok:
+            # Spotify may have launched ahead of us and already given up on the
+            # proxy; this puts it right.
+            ensure_spotify_routed()
+            if not patched:
+                # Mentioned only once the audio side is known to be working, so
+                # the two halves of the message cannot contradict each other.
+                message = "%s Display ads may still show: %s" % (message, patch_message)
+        else:
+            # The one failure worth interrupting for. Everything else degrades
+            # into "some ads got through"; this is the app not working at all,
+            # and a balloon that vanishes after five seconds is not enough to
+            # say so.
+            log_debug("Blocking failed to start: %s" % message)
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "%s\n\nAds will play normally until this is fixed. The most "
+                "common cause is another program holding the port, which a "
+                "restart usually clears." % message,
+                "Spotify Skipper", 0x10 | MB_SETFOREGROUND | MB_TOPMOST,
+            )
         notify(message)
         # The menu was built before any of this ran, so its status line still
         # describes a not-yet-started app until it is rebuilt.

@@ -17,9 +17,10 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DisableProgramGroupPage=yes
-; No elevation: the app writes only inside %APPDATA%\Spotify and changes
-; per-application volume. With "lowest", the auto* constants resolve to
-; per-user locations, so the whole install stays in user space.
+; No elevation: the app writes inside %APPDATA%\Spotify, keeps its own state in
+; %LOCALAPPDATA%, and installs its CA into the *user* certificate store. With
+; "lowest", the auto* constants resolve to per-user locations, so the whole
+; install stays in user space.
 PrivilegesRequired=lowest
 OutputDir=installer_dist
 OutputBaseFilename=SpotifyAdsSkipper_Setup
@@ -51,7 +52,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Registry]
 ; HKA follows PrivilegesRequired, so this lands in HKCU for a per-user install.
 Root: HKA; Subkey: "SOFTWARE\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup
-; Where a pre-existing PAC URL is parked while seamless mode is on, so it can be
+; Where a pre-existing PAC URL is parked while the app is running, so it can be
 ; put back. Removed wholesale on uninstall.
 Root: HKCU; Subkey: "Software\SpotifyAdsSkipper"; Flags: uninsdeletekeyifempty dontcreatekey
 

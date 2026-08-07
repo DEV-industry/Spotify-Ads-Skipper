@@ -3,7 +3,7 @@
 
   # Spotify Ads Skipper
 
-  **Display ads removed. Audio ads muted - or dropped entirely, gapless.**
+  **Audio ads never play. Not muted - never fetched. The next track starts immediately.**
 
   <p>
     <img src="https://komarev.com/ghpvc/?username=DEV-industry-Spotify-Ads-Skipper&label=VIEWS&style=for-the-badge&color=green" alt="Views" />
@@ -35,7 +35,7 @@
 
 - [What it does](#what-it-does)
 - [How it works](#how-it-works)
-- [Seamless mode](#seamless-mode)
+- [What it installs](#what-it-installs)
 - [Risks, stated plainly](#risks-stated-plainly)
 - [Installation](#installation)
 - [Project structure](#project-structure)
@@ -46,29 +46,27 @@
 
 ## What it does
 
-A tray utility for Windows that removes Spotify's advertising. Spotify delivers
-its ads through three different paths, so there are three mechanisms:
+A tray utility for Windows that stops Spotify's ads from being delivered at
+all. Spotify serves two kinds of advertising over two different paths, so there
+are two mechanisms - both always on, neither optional:
 
-| Ad type | Default | Seamless mode |
-| :-- | :-- | :-- |
-| **Display** - home banners, takeovers, video overlays | Removed | Removed |
-| **Audio** - the spoken ads between tracks | Muted, still runs its length | **Never plays.** Next track starts immediately |
+| Ad type | What happens |
+| :-- | :-- |
+| **Audio** - the spoken ads between tracks | **Never played.** The request is answered with a 404 and the client moves straight to the next track |
+| **Display** - home banners, takeovers, video overlays | **Removed** from the client's UI bundle |
 
-The default install needs no administrator rights. It patches Spotify's UI
-bundle in `%APPDATA%\Spotify` and keeps its own settings and log in
-`%LOCALAPPDATA%\SpotifyAdsSkipper`, and touches nothing else. Seamless mode is
-opt-in and asks first, because it needs a local certificate authority - see
-below.
+There is no "mute the ad instead" mode. Silencing an ad still costs you the
+thirty seconds; this does not. That means the app cannot work without a local
+certificate authority, so it asks once on first run and closes if you decline -
+see [what it installs](#what-it-installs).
+
+It needs no administrator rights. It patches Spotify's UI bundle in
+`%APPDATA%\Spotify`, keeps its own settings and log in
+`%LOCALAPPDATA%\SpotifyAdsSkipper`, and touches nothing else.
 
 ---
 
 ## How it works
-
-**Display ads** live in `xpui.spa`, the client's UI bundle. The app appends a
-CSS block hiding every ad container by its `data-testid`. Those attributes are
-what Spotify's own tests select on, so they outlast the minified class names
-that change with each build. If one is renamed the rule stops matching - the ad
-reappears, nothing breaks.
 
 **Audio ads** are fetched by the client's native core from a handful of paths on
 the same host as everything else:
@@ -81,25 +79,27 @@ GET  /ads/v2/config
 ```
 
 Playback travels entirely different paths - `/metadata/`, `/playplay/`,
-`/playlist/`, `/widevine-license/`. Seamless mode runs a local proxy that
-answers the ad paths with a 404 and forwards everything else untouched. The
-client treats the empty slot as "no ad" and moves straight to the next track.
+`/playlist/`, `/widevine-license/`. The app runs a local proxy that answers the
+ad paths with a 404 and forwards everything else untouched. The client treats
+the empty slot as "no ad" and moves straight to the next track.
 
-Without seamless mode the app instead watches playback and mutes Spotify for the
-ad's duration.
+**Display ads** live in `xpui.spa`, the client's UI bundle. The app appends a
+CSS block hiding every ad container by its `data-testid`. Those attributes are
+what Spotify's own tests select on, so they outlast the minified class names
+that change with each build. If one is renamed the rule stops matching - the ad
+reappears, nothing breaks.
 
 **Staying patched.** Spotify replaces `xpui.spa` wholesale when it updates. The
 app records the version it patched and re-applies after an update.
 
 ---
 
-## Seamless mode
-
-This is the mode that makes ads vanish rather than fall silent. It is off by
-default and shows an explanation before enabling.
+## What it installs
 
 To read request paths inside Spotify's HTTPS traffic, the proxy has to terminate
-TLS, which means presenting certificates the client trusts. So:
+TLS, which means presenting certificates the client trusts. This is not an
+optional extra - it is how the app blocks anything at all, which is why the
+first run asks before setting any of it up, and exits if you say no. So:
 
 - **A certificate authority is generated on your machine, on first use.** It is
   never shipped in the installer. This matters: a CA baked into the executable
@@ -122,37 +122,39 @@ TLS, which means presenting certificates the client trusts. So:
 - **A dead proxy falls back to DIRECT.** If the app is killed rather than closed,
   the PAC entry outlives it - the fallback means Spotify connects straight out
   and ads return, instead of losing connectivity. The next start clears it.
-- **Turning the mode off removes the CA and the routing**, and so does
-  uninstalling. If either ever fails, the app says so rather than reporting
-  success, and **Remove local certificate** stays in the tray menu for as long
-  as a certificate is installed.
+- **Uninstalling removes the CA and the routing**, and so does **Remove local
+  certificate** in the tray menu - which closes the app, since blocking depends
+  on it, and makes the next launch ask again. If removal ever fails, the app
+  says so rather than reporting success, and the menu item stays put for as
+  long as a certificate is installed.
 
 ---
 
 ## Risks, stated plainly
 
-Read this before enabling seamless mode or handing the app to someone else.
+Read this before installing, and before handing the app to someone else. There
+is no reduced mode to retreat to, so these apply to using it at all.
 
 - **A root CA is a sensitive thing to install.** The name constraints mean it
   can only ever vouch for Spotify's three domains, and the key is encrypted to
   your account - but it is still a signing key sitting on your disk. If that
-  trade is not one you want, leave seamless mode off; muting needs none of it.
-- **While the mode is on, traffic to Spotify's domains is decrypted on your
+  trade is not one you want, do not install this.
+- **While the app runs, traffic to Spotify's domains is decrypted on your
   machine.** That is the whole mechanism. It covers anything on this machine
   talking to those domains, a browser tab on `open.spotify.com` included, so
   your Spotify login passes through the local proxy. Nothing is written to disk
-  and nothing leaves the machine, but it is worth knowing before you enable it.
+  and nothing leaves the machine, but it is worth knowing going in.
 - **The certificate stays installed until you remove it.** Closing the app stops
   the proxy and the routing, but deliberately leaves the certificate in place so
-  the mode can come back up next time. Turning seamless mode off, using **Remove
-  local certificate**, or uninstalling all remove it.
-- **Seamless mode is detectable by Spotify.** It does not merely block traffic on
-  your own machine; it answers Spotify's API requests on their behalf, and the
-  client will keep re-requesting an ad it never receives. That is a visible
-  pattern server-side. No account action is known to follow from it, but the
-  risk is not zero, and it is a deeper intervention than the hosts-file blocking
-  earlier versions used.
-- **Patching the client breaks Spotify's Terms of Service.** Both modes do this.
+  it can come back up next time. **Remove local certificate** or uninstalling
+  are what get rid of it.
+- **This is detectable by Spotify.** It does not merely block traffic on your
+  own machine; it answers Spotify's API requests on their behalf, and the client
+  will keep re-requesting an ad it never receives. That is a visible pattern
+  server-side. No account action is known to follow from it, but the risk is not
+  zero, and it is a deeper intervention than the hosts-file blocking earlier
+  versions used.
+- **Patching the client breaks Spotify's Terms of Service.**
 - **Ad endpoints can move.** They are paths, not domains, and Spotify can rename
   them. When that happens ads come back until the list is updated.
 
@@ -162,10 +164,17 @@ Read this before enabling seamless mode or handing the app to someone else.
 
 ### Method 1: the installer
 
+You need the Spotify desktop client from [spotify.com](https://www.spotify.com/download/windows/)
+- the Microsoft Store build installs somewhere else and will not be found.
+
 1. Download `SpotifyAdsSkipper_Setup.exe` from the [latest release](https://github.com/DEV-industry/Spotify-Ads-Skipper/releases/latest).
-2. Run it. No administrator prompt - it installs per-user.
-3. Launch it. Spotify restarts once to pick up the patch, then it sits in the tray.
-4. Optional: right-click the tray icon and enable **Seamless mode**.
+2. Run it. Windows SmartScreen will warn you, because the installer is not code-signed: **More info -> Run anyway**.
+3. Click through the wizard. No administrator prompt - it installs per-user.
+4. On first launch it explains the certificate and asks. Choosing Cancel installs nothing and closes.
+5. Accept, and Spotify restarts once. From then on it sits in the tray and starts with Windows.
+
+Right-click the tray icon for the status line - `blocking (N ad requests
+dropped)` means it is working.
 
 <details>
 <summary><b>Method 2: run from source</b></summary>
@@ -175,7 +184,7 @@ Read this before enabling seamless mode or handing the app to someone else.
 ```bash
 git clone https://github.com/DEV-industry/Spotify-Ads-Skipper.git
 cd Spotify-Ads-Skipper
-pip install pystray Pillow pycaw comtypes psutil pywin32 cryptography certifi
+pip install pystray Pillow psutil pywin32 cryptography certifi
 python SpotifyAdRemover/Spotify.py
 ```
 
@@ -195,13 +204,12 @@ Build with `pyinstaller SpotifyAdRemover/Spotify.spec`.
 
 ```text
 SpotifyAdRemover/
-├── Spotify.py        # Tray app, orchestrates all three mechanisms
-├── spotify_env.py    # Locates the Spotify install, inspects its state
-├── xpui_patch.py     # Backs up / patches / restores xpui.spa
-├── ad_watch.py       # Audio-ad detection and muting (default mode)
-├── ad_proxy.py       # Path-filtering HTTPS proxy (seamless mode)
+├── Spotify.py        # Tray app, consent gate, orchestrates both mechanisms
+├── ad_proxy.py       # Path-filtering HTTPS proxy - kills audio ads
 ├── proxy_ca.py       # Per-installation certificate authority
 ├── proxy_config.py   # PAC file and Windows proxy routing
+├── xpui_patch.py     # Backs up / patches / restores xpui.spa - kills display ads
+├── spotify_env.py    # Locates the Spotify install, inspects its state
 └── Spotify.spec      # PyInstaller build spec
 ```
 
@@ -231,24 +239,38 @@ the separation is still clean.
 </details>
 
 <details>
-<summary><b>Do I need seamless mode?</b></summary>
+<summary><b>Can I use it without installing the certificate?</b></summary>
 
 <br />
 
-Only if silence during ads bothers you. Display ads are gone either way. Muting
-needs no certificate, no proxy and no routing changes, so if you are unsure,
-start without it.
+No. Reading the request path is the only way to tell an ad fetch from playback,
+and that path is inside TLS. Earlier builds offered muting as a certificate-free
+alternative; it was removed, because it does not actually save you the ad - it
+just makes you sit through it in silence.
+
+Decline at the first-run prompt and the app installs nothing and closes.
 
 </details>
 
 <details>
-<summary><b>What happens if the app crashes while seamless mode is on?</b></summary>
+<summary><b>What happens if the app crashes?</b></summary>
 
 <br />
 
 The PAC file falls back to `DIRECT`, so Spotify connects normally and ads come
-back. You lose the blocking, not your connection. Starting the app again
-restores it.
+back. You lose the blocking, not your connection. Starting the app again clears
+the stale entry and restores it.
+
+</details>
+
+<details>
+<summary><b>How do I know it is actually working?</b></summary>
+
+<br />
+
+Right-click the tray icon. The status line reads `blocking (N ad requests
+dropped)` and the number climbs as Spotify asks for ads. Anything starting
+`NOT BLOCKING` means ads are getting through, and says why.
 
 </details>
 
@@ -258,8 +280,8 @@ restores it.
 <br />
 
 No. It writes inside `%APPDATA%\Spotify` and `%LOCALAPPDATA%\SpotifyAdsSkipper`,
-adjusts per-application volume, and installs its CA into the *user* certificate
-store. None of that needs elevation.
+sets a per-user proxy autoconfig entry, and installs its CA into the *user*
+certificate store. None of that needs elevation.
 
 </details>
 
@@ -267,8 +289,8 @@ store. None of that needs elevation.
 
 ## Disclaimer
 
-Built for educational purposes: client-side UI patching, Windows audio session
-control, and HTTPS path filtering through a local proxy.
+Built for educational purposes: HTTPS path filtering through a local proxy,
+name-constrained certificate authorities, and client-side UI patching.
 
 Modifying the Spotify client and intercepting its API traffic both break
 Spotify's Terms of Service. The author does not encourage blocking ads on
