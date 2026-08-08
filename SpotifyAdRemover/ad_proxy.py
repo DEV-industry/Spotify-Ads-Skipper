@@ -35,11 +35,10 @@ import proxy_ca
 
 LISTEN_HOST = "127.0.0.1"
 
-# 0 means "let Windows pick", for the same reason the PAC port does. A fixed
-# published port is one anything on the machine can wait for and claim while
-# the app is not running. Losing the race is not a compromise here - the bind
-# fails and the app refuses to start rather than sending traffic to a stranger
-# - but it is a denial of service that costs an attacker nothing to arrange.
+# 0 means "let Windows pick". A fixed published port is one anything on the
+# machine can claim while the app is down. Losing that race is not a
+# compromise - the bind fails and the app refuses to start - but it is a
+# denial of service free to arrange.
 DEFAULT_PORT = 0
 
 # The only hosts this proxy will connect to at all. The PAC hands us Spotify
@@ -124,32 +123,21 @@ ROUTINE_ERRORS = (
 )
 
 
-# A hostname is letters, digits, hyphens and dots. Nothing else reaches the
-# resolver, because two different things read the string and they disagree
-# about where it ends:
-#
-#   "example.com\x00.spotify.com" satisfies the suffix test below, and then
-#   getaddrinfo - C, NUL-terminated - resolves plain example.com. Measured:
-#   the gate returned True and the proxy opened a connection to example.com,
-#   which is exactly the open relay the gate exists to prevent.
-#
-# The same mismatch turns up without a NUL. IDNA nameprep strips soft hyphens,
-# so "apre\xADsolve.spotify.com" resolves to the real host while remaining a
-# distinct string - one that x509.DNSName later rejects, after the RSA keygen,
-# and that therefore never lands in the context cache. Every request pays for
-# a fresh key.
-#
-# Validating the exact bytes that will be resolved closes both, and does it
-# before any work is done.
+# Letters, digits, hyphens and dots only. The suffix test below and the C
+# resolver disagree about where a string ends, and anything outside this set
+# can exploit the gap: "example.com\x00.spotify.com" passes the suffix test
+# while getaddrinfo stops at the NUL and resolves example.com, and IDNA
+# nameprep strips a soft hyphen so "apre\xADsolve.spotify.com" resolves to the
+# real host while staying a distinct - and unsignable - string.
 _VALID_HOST = re.compile(r"\A[A-Za-z0-9.-]{1,253}\Z")
 
 
 def _canonical_host(host):
     """Lower-case the host, or None when it is not a plain hostname.
 
-    Case is folded here rather than at each call site: DNS is case-insensitive,
-    so "SPOTIFY.com" and "spotify.com" are one host, and letting them be two
-    cache keys is another way to force an unbounded number of key generations.
+    Case is folded once here, not at each call site: DNS is case-insensitive,
+    so two casings of one host must not become two cache keys and two RSA
+    key generations.
     """
     if not _VALID_HOST.match(host):
         return None
@@ -287,15 +275,9 @@ def _read_chunked_body(reader):
     out = bytearray()
     total = 0
 
-    # `total` counts what the sender DECLARES; this counts what we actually
-    # hold. The two diverge, and only the second one bounds memory:
-    #
-    #   "1;<65000 bytes of chunk-extension>\r\n" declares one byte. _chunk_size
-    #   splits on ";" so `total` rises by 1 while the whole line is appended.
-    #   Trailers were worse - that loop had no counter at all. Measured on the
-    #   real function: 1132 MiB buffered in three seconds, `total` still 0.
-    #
-    # Every append is followed by this check, so no path can outrun the cap.
+    # `total` counts what the sender declares, which bounds nothing: a chunk
+    # header of "1;<65 KB of extension>" declares one byte and buffers 65 KB.
+    # This counts what is actually held, and every append is followed by it.
     def over_cap():
         return len(out) > MAX_BODY_BYTES
 
@@ -370,18 +352,11 @@ def _upstream_ctx():
     if _upstream_ctx_cache:
         return _upstream_ctx_cache[0]
 
-    # Fails closed. The previous fallback to ssl.create_default_context() was
-    # worse than not running: on Windows that loads the user's root store,
-    # which by then contains this app's own CA - measured, 123 anchors with
-    # "Spotify Ads Skipper Local CA" among them. The upstream leg is the one
-    # hop that is supposed to notice a forged Spotify certificate, and
-    # anchoring it on our own signing key is precisely the circularity the
-    # docstring above says must be avoided. Silent, too: this function has no
-    # logger and the context is cached for the life of the process.
-    #
-    # certifi is a hard dependency and PyInstaller bundles it, so reaching the
-    # raise means the build is broken - which the caller surfaces as "ads are
-    # NOT being blocked" rather than quietly weakening the guarantee.
+    # Fails closed. Falling back to ssl.create_default_context() would load the
+    # Windows root store, which contains this app's own CA - anchoring the one
+    # hop meant to notice a forged Spotify certificate on our own signing key.
+    # certifi is a hard dependency, so an ImportError means a broken build,
+    # which the caller surfaces as "ads are NOT being blocked".
     import certifi
 
     ctx = ssl.create_default_context(cafile=certifi.where())
@@ -393,9 +368,8 @@ def _upstream_ctx():
 def upstream_anchor_count():
     """How many trust anchors the upstream leg uses, and whether ours is one.
 
-    Exposed for the self test: a bundle that silently lost certifi, or a
-    context that somehow picked up the Windows store, is exactly the failure
-    that has no visible symptom until someone is being intercepted.
+    For the self test: a context that picked up the Windows store has no
+    visible symptom until someone is being intercepted.
     """
     ctx = _upstream_ctx()
     anchors = ctx.get_ca_certs()
@@ -461,18 +435,12 @@ class AdProxy(threading.Thread):
         # this proxy to a single, simple wire format.
         ctx.set_alpn_protocols(["http/1.1"])
 
-        # Written into the CA directory rather than %TEMP%: SSLContext can only
-        # load a chain from a path, and %TEMP% files inherit permissions that
-        # let every process on the machine read this private key. The CA
-        # directory is already locked to this account, and a file created in it
-        # inherits that DACL - which is what protects this one.
-        #
-        # No per-file icacls here. It measured at 292.9 ms, six times the RSA
-        # keygen it accompanied, making it by far the most expensive thing on
-        # the path from a new hostname to a working connection - and it was
-        # re-applying, to a file that lives for microseconds, the same
-        # restriction the directory already carries. generate_ca() locks the
-        # directory down before any key material is written to it.
+        # In the CA directory, not %TEMP%: SSLContext can only load a chain
+        # from a path, and %TEMP% files are readable by every process on the
+        # machine. The CA directory carries an inheritable single-SID ACL, so
+        # this file gets that restriction on creation and needs no icacls of
+        # its own - which also keeps a ~300 ms process spawn off the path from
+        # a new hostname to a working connection.
         os.makedirs(proxy_ca.CA_DIR, exist_ok=True)
         handle, path = tempfile.mkstemp(suffix=".pem", dir=proxy_ca.CA_DIR)
         try:
@@ -604,16 +572,12 @@ class AdProxy(threading.Thread):
                 self._refuse(client, "malformed port in %r" % target)
                 return
 
-            # Refuse anything that is not Spotify on a web port. Without this
-            # the listener is an unauthenticated proxy that any local process
-            # can use to reach arbitrary hosts and ports - including services
-            # bound to loopback that it could not otherwise talk to - with the
-            # connections appearing to come from this app.
-            #
-            # Everything downstream uses the canonical form, never the bytes
-            # the client sent: the string that was validated has to be the
-            # string that gets resolved, cached and put into a certificate, or
-            # the check does not mean anything.
+            # Without this the listener is an unauthenticated proxy any local
+            # process can point at arbitrary hosts, loopback services included,
+            # with the connections appearing to come from this app. Everything
+            # downstream uses the canonical form, never the bytes the client
+            # sent - the validated string has to be the one that is resolved,
+            # cached and signed.
             host = _canonical_host(raw_host)
             if host is None or not _intercept_host(host) or port not in ALLOWED_PORTS:
                 self._refuse(client, "%r:%d is out of scope" % (raw_host, port))
@@ -742,8 +706,8 @@ class AdProxy(threading.Thread):
                 return
 
             outcome = self._relay_response(up_reader, tls_client, method)
-            # Checked before truthiness: UPGRADED is a truthy object, and
-            # "keep going" is exactly the wrong reading of it.
+            # Identity before truthiness: UPGRADED is truthy, and "keep going"
+            # is the wrong reading of it.
             if outcome is UPGRADED:
                 self._relay_tunnel(client_reader, tls_client, up_reader, tls_up)
                 return
@@ -754,18 +718,12 @@ class AdProxy(threading.Thread):
         """Pump bytes both ways until either side hangs up.
 
         Reached only after a 101, where HTTP framing no longer applies. Reads
-        go through the buffered readers rather than the sockets: the response
-        head was read through them, so frames that arrived in the same TCP
-        segment are already sitting in their buffers and a raw recv() would
-        skip straight past them. read1() hands back whatever is buffered
-        without waiting for a full block.
+        go through the buffered readers, not the sockets: the response head was
+        read through them, so frames that arrived in the same TCP segment are
+        already buffered and a raw recv() would skip past them.
         """
         for sock in (tls_client, tls_up):
             try:
-                # A WebSocket is idle for long stretches by design, and the
-                # request-oriented timeout would tear it down mid-conversation.
-                # Still bounded: a silently dead peer must not hold a slot out
-                # of the connection ceiling for the life of the process.
                 sock.settimeout(TUNNEL_TIMEOUT)
             except OSError:
                 return
@@ -810,36 +768,25 @@ class AdProxy(threading.Thread):
             except OSError:
                 return False
 
-            # Responses get the same framing check requests already had. A head
-            # carrying both Content-Length and chunked, or two conflicting
-            # lengths, can be framed two ways - and whichever this parser picks,
-            # the leftover bytes become the head of the next response. Measured:
-            # duplicate lengths of 3 and 20 delivered "ABC" and left 17 bytes to
-            # be read as the following reply. Confined to one client's own
-            # tunnel, since nothing is pooled upstream, but it is the exact case
-            # already refused in the other direction.
+            # Same check requests get. A head carrying both Content-Length and
+            # chunked, or two conflicting lengths, can be framed two ways, and
+            # the leftover bytes become the head of the next response.
             if _framing_is_ambiguous(raw):
                 self._log("Ambiguous response framing; closing the connection")
                 return False
 
             status = _status_code(raw)
 
-            # 101 first, because it is in the 1xx range and means the opposite
-            # of the rest of it. Spotify's dealer connection - dealer.spotify.com
-            # and its regional siblings, all of which this proxy carries - is a
-            # WebSocket, and after the 101 the bytes are WS frames, not another
-            # HTTP head. Treating it as interim made the loop read those frames
-            # as a response head and throw them away, so the client saw a
-            # successful handshake onto a socket that then delivered nothing,
-            # forever, in a reconnect loop. Hand the tunnel over instead.
+            # 101 first: it sits in the 1xx range but means the opposite. After
+            # it the bytes are WebSocket frames, not another HTTP head -
+            # Spotify's dealer connection is one, and this proxy carries it.
             if status == 101:
                 return UPGRADED
 
             # 1xx proper is interim: the real response still follows on the
             # same connection. Returning here would leave it in the buffer and
-            # hand it to the NEXT request, so every reply after one 103 Early
-            # Hints - which CDNs in front of the CDN domains do send - would be
-            # one request out of step. Go round and read the real head.
+            # hand it to the NEXT request, putting every reply after one 103
+            # Early Hints - which the CDNs do send - one request out of step.
             if status is not None and 100 <= status < 200:
                 continue
 
@@ -850,15 +797,10 @@ class AdProxy(threading.Thread):
                 return True
             break
 
-        # Presence of the header, not truthiness of its value. _content_length
-        # returns 0 both for "no such header" and for "the server said zero",
-        # and the old `if length:` sent the second case down the read-until-
-        # close path at the bottom of this function. A perfectly ordinary
-        # "200 OK, Content-Length: 0, keep-alive" then blocked for the full
-        # socket timeout while the client, which already considered that
-        # response complete, sent its next request into a connection about to
-        # be torn down. This app's own BLOCK_RESPONSE is shaped exactly like
-        # that, so it was modelling the case it mishandled.
+        # Presence of the header, not truthiness of its value: 0 means both "no
+        # such header" and "the server said zero", and treating the second as
+        # the first sends a complete response down the read-until-close path,
+        # where it blocks for the full socket timeout.
         lengths = _content_lengths(raw)
         if lengths:
             remaining = lengths[0]
@@ -902,9 +844,8 @@ class AdProxy(threading.Thread):
                         return False
                     tls_client.sendall(chunk)
                     remaining -= len(chunk)
-                # Bounded like every other readline in this file. Left
-                # unbounded, a chunk followed by no newline buffered without
-                # limit - measured at 96.7 MiB of heap for 48 MiB fed.
+                # Bounded like every other readline here: a chunk followed by
+                # no newline would otherwise buffer without limit.
                 tail = up_reader.readline(MAX_HEADER_BYTES + 1)
                 if not tail:
                     return False

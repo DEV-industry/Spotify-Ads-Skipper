@@ -126,40 +126,26 @@ def build_logo_css():
     except Exception:
         return ""
 
-    # Anchored to body, deliberately. The obvious targets do not work: the
-    # data-testid="topbar" header from dwp-top-bar.js matches nothing in the
-    # shipped DOM (verified by outlining it - nothing drew), and
-    # topbar-content-wrapper is an empty measuring div, not the button row.
-    # body always exists, and since both this badge and Spotify's own top-bar
-    # icons are anchored to the right edge, the gap between them holds.
+    # Anchored to body, not to the top bar: data-testid="topbar" matches
+    # nothing in the shipped DOM and topbar-content-wrapper is an empty
+    # measuring div. Both this badge and Spotify's own icons hang off the right
+    # edge, so the gap between them holds.
     #
-    # Sits in the gap between the search field and the notification bell, and
-    # only when that gap is genuinely roomy.
+    # It sits between the search field and the notification bell. That strip
+    # always starts 271px from the right edge - the bell does not move - but
+    # its far side follows the search field, which is centred and has
+    # breakpoints. Room left beside a badge ending at 314px:
     #
-    # Measured across window widths, the free strip there always starts 271px
-    # from the right edge - the bell does not move - while its far side follows
-    # the search field, which is centred and has responsive breakpoints. The
-    # room left beside a badge ending at 314px:
-    #
-    #     800-815px     105px         search field collapses to an icon
-    #     830-950px      -3px         <- it expands; no room at all
+    #     800-815px     105px         search field collapsed to an icon
+    #     830-950px      -3px         <- expands; no room at all
     #     980px          16px
     #     1000-1120px   36-105px      fine
-    #     1130px          2px         <- it jumps to a wider variant again
-    #     1170px+        22px upward, growing steadily
+    #     1130px          2px         <- jumps to a wider variant
+    #     1170px+        22px upward
     #
-    # So the badge shows in three places and hides in two, which is why the
-    # rules below are ranges rather than one threshold. Wedging it into a
-    # couple of spare pixels made it look welded to the search field.
-    #
-    # right: 292px places it 21px clear of the bell, about the same centre
-    # spacing Spotify uses between its own top-bar icons, so it reads as part
-    # of that row. The offset is to the badge's right edge - forgetting that is
-    # how an earlier right: 300px ended up overlapping the install button.
-    #
-    # Drawn as a circle because cat.ico is a photograph, opaque edge to edge.
-    # Square at this size it reads as a beige smudge; clipped and ringed it
-    # matches the avatar further along the bar.
+    # Hence ranges below rather than one threshold. right: 292px leaves 21px of
+    # clearance, matching the spacing between Spotify's own top-bar icons; the
+    # offset is to the badge's right edge.
     return """
 #sas-badge {
   display: none;

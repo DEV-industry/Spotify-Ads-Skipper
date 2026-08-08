@@ -11,30 +11,23 @@ Four rules govern this file, all load-bearing:
    who downloaded the app could impersonate any HTTPS site for every other
    user. Generation happens on first run, locally, and the key never leaves.
 
-2. The CA is limited by name AND by purpose, which together keep the worst case
-   small: even with the private key in hand, an attacker can only forge
-   WEBSITE certificates, and only for the three domains below - not for a bank
-   or anything else the user browses.
-
-   Both halves are needed, and the first alone was not enough. RFC 5280
-   constrains only the name FORMS that appear in permittedSubtrees, so DNS
-   entries by themselves left an iPAddress SAN unconstrained: a leaf for IP
-   1.1.1.1 validated clean against Windows' chain engine. And name constraints
-   say nothing about purpose, so leaves for code signing and S/MIME validated
-   clean too, needing no network position at all. Hence the IP exclusions and
-   the serverAuth EKU in generate_ca(), both measured against Windows
-   CryptoAPI and OpenSSL.
+2. The CA is limited by name AND by purpose. Both halves are needed: RFC 5280
+   constrains only the name FORMS listed in permittedSubtrees, so DNS entries
+   alone leave an iPAddress SAN unconstrained, and name constraints say nothing
+   about purpose, so code-signing and S/MIME leaves stay valid. Hence the IP
+   exclusions and the serverAuth EKU in generate_ca(). With both, a holder of
+   the private key can forge website certificates for the three domains below
+   and nothing else.
 
    is_constrained() must list every one of those limits: load_ca() reuses any
-   CA it approves, so a limit missing from that check is a limit no existing
+   CA it approves, so a limit missing there is a limit no existing
    installation ever receives.
 
 3. The key is encrypted at rest with DPAPI, tied to this Windows account, and
-   written with an ACL restricted to that account. A copy of the file taken to
-   another machine - via a backup, a synced folder, a lifted disk - is inert.
-   The exception is a machine where DPAPI itself fails: the key is then stored
-   in the clear under KEY_PLAIN_MAGIC, key_is_sealed goes False, and the self
-   test says so, because on that machine this paragraph is not true.
+   written with an ACL restricted to that account. A copy taken to another
+   machine is inert - except where DPAPI itself fails, in which case the key is
+   stored in the clear under KEY_PLAIN_MAGIC, key_is_sealed goes False and the
+   self test says so, because on that machine this paragraph is not true.
 
 4. Trust is decided by comparing the stored certificate byte for byte with what
    is in the root store. Matching on the name instead would accept a leftover
@@ -88,10 +81,9 @@ PERMITTED_DOMAINS = ("spotify.com", "scdn.co", "spotifycdn.com")
 # an older version and get re-wrapped on first load.
 KEY_MAGIC = b"SASKEY1\n"
 
-# Marks a key file that DPAPI refused to seal. A bare PEM used to be written
-# instead, which is indistinguishable from the pre-magic format and therefore
-# invisible: nothing could tell "old file, re-wrap it" from "this machine
-# cannot encrypt keys and the guarantee in the README does not hold here".
+# Marks a key file DPAPI refused to seal. A bare PEM is indistinguishable from
+# the pre-magic format, so "old file, re-wrap it" could not be told apart from
+# "this machine cannot encrypt keys at all".
 KEY_PLAIN_MAGIC = b"SASPLAIN1\n"
 
 # Mixed into the DPAPI ciphertext so a blob from this app cannot be handed
@@ -304,14 +296,11 @@ def _lock_down(path):
     app with a crafted environment could set it to "*S-1-1-0", which icacls
     accepts happily and which grants the CA key to Everyone.
 
-    On a directory the grant is made inheritable, and that is load-bearing
-    rather than tidy. Without (OI)(CI) the directory's ACE applies to the
-    directory alone, so Windows falls back to the process token's default DACL
-    for anything created inside - measured: a new file in the locked CA
-    directory came out with SYSTEM full control and a logon-session SID
-    alongside the user. The proxy writes a leaf private key into that
-    directory for every new hostname, so this is what protects those, and it
-    is why they no longer each pay for their own icacls run.
+    On a directory the grant is made inheritable, and that is load-bearing.
+    Without (OI)(CI) the ACE applies to the directory alone and Windows falls
+    back to the process token's default DACL for anything created inside -
+    which includes SYSTEM. The proxy writes a leaf private key into that
+    directory per hostname, so this is what protects them.
     """
     sid = _current_user_sid()
     if not sid:
@@ -374,12 +363,11 @@ def _store_key(key):
     except Exception:
         sealed = None
 
-    # Falling back to plaintext keeps the app working on a machine where DPAPI
-    # is broken; the ACL and the name constraints still apply. But it quietly
-    # voids the promise that a copy of this file is useless on another machine
-    # - it is the one route by which the key can leave without code execution
-    # here - so the state is recorded rather than inferred, given its own magic
-    # so it is distinguishable on sight, and reported by the self test.
+    # Plaintext keeps the app working where DPAPI is broken; the ACL and the
+    # constraints still apply. But it voids the promise that a copy of this
+    # file is useless elsewhere - the one route by which the key can leave
+    # without code execution here - so the state gets its own magic and is
+    # reported rather than inferred.
     key_is_sealed = sealed is not None
     _write_private(CA_KEY, (KEY_MAGIC + sealed) if sealed else (KEY_PLAIN_MAGIC + pem))
 
@@ -436,12 +424,9 @@ def ca_exists():
 def is_constrained(cert):
     """True when this CA carries every limit the current version applies.
 
-    Deliberately an equality test against today's full set, not a "looks
-    roughly right" check. load_ca() reuses any CA this returns True for, so
-    every limit added later has to be listed here or existing installs keep
-    the weaker CA they already have, forever, and never see the fix. That is
-    exactly what happened when the DNS permitted set was the only thing
-    checked: a CA with no purpose limit and no IP exclusions passed.
+    An equality test against today's full set, not a "looks roughly right"
+    check. load_ca() reuses any CA this approves, so a limit added later and
+    not listed here is one existing installations keep missing forever.
     """
     try:
         ext = cert.extensions.get_extension_for_class(x509.NameConstraints)
@@ -530,16 +515,11 @@ def generate_ca():
         # that cannot enforce this must reject the CA outright rather than
         # quietly treat it as unrestricted.
         #
-        # The IP exclusions are not decoration. RFC 5280 constrains only the
-        # name FORMS that appear in permittedSubtrees, so with DNS entries
-        # alone an iPAddress SAN was entirely unconstrained - and make_leaf()
-        # below emits exactly that for an IP literal. Measured against Windows'
-        # own chain engine: a leaf for IP 1.1.1.1 validated clean, and with
-        # these two lines it returns HAS_EXCLUDED_NAME_CONSTRAINT instead.
-        #
-        # Excluding directoryName is NOT possible here, tempting as it looks:
-        # an empty DN is an initial subsequence of every DN, so it would
-        # reject our own leaves and break interception entirely.
+        # The IP exclusions are load-bearing, not decoration: constraints cover
+        # only the name forms listed, and make_leaf() below emits an iPAddress
+        # SAN for an IP literal. Excluding directoryName as well is tempting
+        # and wrong - an empty DN is an initial subsequence of every DN, so it
+        # would reject our own leaves and break interception.
         .add_extension(
             x509.NameConstraints(
                 permitted_subtrees=[x509.DNSName(d) for d in PERMITTED_DOMAINS],
@@ -551,15 +531,11 @@ def generate_ca():
             critical=True,
         )
         # Purpose, as opposed to name. Without this the CA is trusted for every
-        # purpose there is, and name constraints say nothing about most of
-        # them: leaves for code signing (subject "Microsoft Corporation") and
-        # for S/MIME (rfc822 anyone@anywhere) both validated clean, needing no
-        # network position at all. Constraining the CA to server
-        # authentication makes all of those NOT_VALID_FOR_USAGE, because both
-        # CryptoAPI and OpenSSL nest EKU down the chain.
-        #
+        # purpose there is - code signing and S/MIME included, neither of which
+        # needs a network position to abuse. Both CryptoAPI and OpenSSL nest
+        # EKU down the chain, so this makes those NOT_VALID_FOR_USAGE.
         # Non-critical deliberately: a critical EKU on a trust anchor is
-        # handled inconsistently by verifiers, and the nesting works either way.
+        # handled inconsistently, and the nesting works either way.
         .add_extension(
             x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]),
             critical=False,
@@ -594,12 +570,10 @@ def load_ca():
 
     key = _load_key() if cert is not None else None
 
-    # Expiry is checked here because nothing else would notice. ca_exists(),
-    # is_constrained() and is_trusted() all stay True past not_valid_after, so
-    # a CA would be reused forever - and the failure is not graceful: CONNECT
-    # succeeds and the 200 goes out before the client-side handshake fails, so
-    # Spotify gets a certificate error rather than falling back to a direct
-    # connection.
+    # Nothing else would notice: ca_exists(), is_constrained() and is_trusted()
+    # all stay True past not_valid_after. The failure is not graceful either -
+    # CONNECT succeeds and the 200 goes out before the handshake fails, so
+    # Spotify gets a certificate error rather than a direct connection.
     expired = cert is not None and cert.not_valid_after_utc <= datetime.datetime.now(
         datetime.timezone.utc
     )
@@ -756,13 +730,10 @@ def untrust():
         pass
 
     # is_trusted() compares exact DER, so it needs the PEM to know what to look
-    # for. When the PEM is already gone - a previous failed removal, or the
-    # uninstaller having deleted the data directory - fall back to matching our
-    # common name, or this returns "removed" having consulted nothing at all.
-    if had_cert:
-        still_trusted = is_trusted()
-    else:
-        still_trusted = bool(_foreign_namesakes())
+    # for. Gone - a previous failed removal, or the uninstaller having deleted
+    # the data directory - fall back to the common name, or this reports
+    # "removed" having consulted nothing.
+    still_trusted = is_trusted() if had_cert else bool(_foreign_namesakes())
 
     if still_trusted:
         return False, (

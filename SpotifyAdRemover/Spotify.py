@@ -39,15 +39,11 @@ proxy = None
 pac_server = None
 
 def _config_path():
-    """Where the consent record lives - deliberately NOT the roaming profile.
+    """Where the consent record lives - deliberately not the roaming profile.
 
-    This file is how the app knows the user has agreed to a root CA. In
-    %APPDATA% it roams: sign in to a second machine with a roaming or
-    container profile and the consent arrives ahead of the user, so the notice
-    is skipped and a CA is generated and trusted there without anyone being
-    asked. A revocation roams too, which is the same problem pointing the other
-    way. %LOCALAPPDATA% does not roam - it is where the CA key already lives,
-    for the same reason.
+    In %APPDATA% it roams, so on a second machine the consent arrives ahead of
+    the user and a CA is trusted there without anyone being asked. A revocation
+    roams too, which is the same problem the other way round.
     """
     base = (os.environ.get("LOCALAPPDATA")
             or os.environ.get("APPDATA")
@@ -118,24 +114,29 @@ def redact(text):
     if _HOME:
         text = text.replace(_HOME, "%USERPROFILE%")
         text = text.replace(_HOME.replace("\\", "\\\\"), "%USERPROFILE%")
+    return text
 
-    # Control characters never survive into the log. Most messages here are
-    # built from constants, but some carry a hostname or an exception string
-    # that a local process chose - and a newline in one of those would let it
-    # forge a timestamped line, while a NUL turns the whole file into
-    # something grep calls binary. Both were observed. Escaping rather than
-    # dropping keeps the evidence visible in a bug report.
+
+def _one_line(text):
+    """Escape control characters so a message cannot span lines.
+
+    For the log only. Some entries carry a hostname or an exception string a
+    local process chose, and a newline in one would let it forge a timestamped
+    line while a NUL makes the file read as binary. Escaped rather than
+    dropped, so the evidence stays visible in a bug report.
+
+    Deliberately not part of redact(): the self-test report is many lines by
+    design and goes through redact() too.
+    """
     return "".join(
         ch if ch == "\t" or ch >= " " else "\\x%02x" % ord(ch)
         for ch in text
     )
 
 
-# The proxy answers requests on a thread each, and they all log. Without this
-# their writes interleave: observed in a real run as four entries whose tails
-# landed on a line of their own ("config"), leaving the log to be read as if
-# something had gone wrong when nothing had. It is the only diagnostic there
-# is now that a failure means ads simply play, so it has to be trustworthy.
+# The proxy answers requests on a thread each and they all log. Without this
+# their writes interleave, stranding the tails of entries on lines of their
+# own - and this file is the only diagnostic there is.
 _log_lock = threading.Lock()
 
 
@@ -148,7 +149,7 @@ def log_debug(message):
         os.makedirs(DATA_DIR, exist_ok=True)
         path = os.path.join(DATA_DIR, "debug_log.txt")
         line = "[%s] %s\n" % (
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), redact(message),
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), _one_line(redact(message)),
         )
         with _log_lock:
             # Rotate rather than grow without bound: this runs for as long as
@@ -210,12 +211,9 @@ def save_config(config):
 def has_consented():
     """Whether the user has already agreed to the local CA.
 
-    "seamless" is the key an earlier build used for the same agreement back
-    when blocking was an optional mode, so an existing yes is honoured rather
-    than asked for a second time. It is consulted only in the absence of an
-    answer to the question actually being asked now - falling back to it
-    whenever "consented" is falsy would let a stale legacy yes override a
-    deliberate no.
+    "seamless" is what an earlier build called the same agreement, honoured so
+    nobody is asked twice - but only when there is no answer to the question
+    being asked now, or a stale legacy yes would override a deliberate no.
     """
     config = load_config()
     if "consented" in config:
@@ -376,13 +374,11 @@ def start_blocking():
         # Confirm we are the ones answering on that port before telling Windows
         # to fetch its proxy configuration from it.
         #
-        # A failure here is logged, not fatal. It cannot actually catch a
-        # squatter - the port was just bound with SO_EXCLUSIVEADDRUSE, so
-        # anything else that had it would have made that bind fail - and the
-        # check has a false-negative mode of its own. Treating it as fatal took
-        # the whole start-up down and, through the except below, deleted the
-        # root certificate installed seconds earlier, regenerating a fresh
-        # 3072-bit CA on the next logon. Every logon.
+        # Logged, not fatal. It cannot catch a squatter anyway - the port was
+        # just bound with SO_EXCLUSIVEADDRUSE, so anything else holding it
+        # would have failed that bind - and it has a false-negative mode of its
+        # own. Fatal, it took the start-up down and deleted the certificate
+        # installed seconds earlier.
         if not pac_server.serves_our_pac():
             log_debug(
                 "PAC self-check did not match on port %d; continuing, since the "
@@ -543,21 +539,16 @@ _shut_down = threading.Event()
 def shutdown():
     """Leave no routing behind - but only routing this process put there.
 
-    Registered with atexit, so it runs on every exit path there is, including
-    `--selftest`. That flag starts nothing, and tearing down regardless meant a
-    diagnostic run reached into the live instance's registry and cleared its
-    AutoConfigURL: ads came back silently, and the app that was actually
-    running had no idea. Measured, not theorised - a planted AutoConfigURL was
-    gone after one --selftest.
+    Registered with atexit, so it runs on every exit path including
+    `--selftest`, which starts nothing. Tearing down regardless let a
+    diagnostic run clear a live instance's AutoConfigURL, silently letting ads
+    back in. proxy and pac_server are the honest record of what this process
+    owns: both are None when blocking never started, and start_blocking()
+    cleans up after itself when it starts and then fails.
 
-    proxy and pac_server are the honest record of what this process owns. Both
-    are None here when blocking never started, and start_blocking() has already
-    cleaned up after itself when it started and then failed.
-
-    The CA deliberately stays either way: it is what the next launch reuses,
-    and pulling a root certificate in and out of the store on every logon is
-    both slow and a good way to end up with it half-removed. Uninstalling, or
-    "Remove local certificate", is what gets rid of it.
+    The CA stays either way. It is what the next launch reuses, and pulling a
+    root certificate in and out of the store on every logon is slow and a good
+    way to end up with it half-removed.
     """
     if _shut_down.is_set():
         return
@@ -579,15 +570,10 @@ def start_shutdown_watcher():
     """Clear the routing when Windows is logging off or shutting down.
 
     atexit does not run when the session manager ends the process, and pystray
-    installs no WM_ENDSESSION handler - so a normal shutdown left AutoConfigURL
-    in the registry pointing at a port nobody would hold until the next launch.
-    That is the ordinary post-reboot state, not an exotic crash, and the port
-    is claimable by anything on the machine while it lasts.
-
-    SetConsoleCtrlHandler is what is available to a windowed process without a
-    message loop of its own: Windows delivers CTRL_LOGOFF_EVENT and
-    CTRL_SHUTDOWN_EVENT through it. A best-effort belt to reconcile_routing()'s
-    braces at the next start, not a replacement for it.
+    installs no WM_ENDSESSION handler, so an ordinary shutdown left
+    AutoConfigURL pointing at a port nobody holds - claimable by anything on
+    the machine until the next launch. Best-effort belt to
+    reconcile_routing()'s braces, not a replacement for it.
     """
     CTRL_CLOSE_EVENT = 2
     CTRL_LOGOFF_EVENT = 5
@@ -827,12 +813,10 @@ def run_cleanup():
     """Uninstall hook: undo everything this app ever changed."""
     ca_ok, ca_message = True, ""
     try:
-        # Not stop_blocking(): its untrust() result is discarded, and this is
-        # the one place where a failed removal has to be surfaced. Inno's
-        # [UninstallRun] cannot read an exit code, and it deletes the data
-        # directory - including the certificate file that identifies our entry
-        # in the store - immediately afterwards. A silent failure here is a
-        # trusted root left behind permanently with nothing left to find it by.
+        # Not stop_blocking(untrust_ca=True): it discards untrust()'s result,
+        # and this is the one place a failed removal has to be surfaced. Inno
+        # cannot read an exit code and deletes the data directory - including
+        # the certificate that identifies our store entry - straight after.
         stop_blocking(untrust_ca=False)
     except Exception as exc:
         log_debug("Cleanup could not stop blocking: %s" % exc)
@@ -925,11 +909,9 @@ def claim_single_instance():
 def main():
     global tray_icon
 
-    # The mutex comes first, ahead of the flag handlers. --cleanup used to run
-    # before it and called stop_blocking() directly, so running the exe with
-    # that flag against a live instance cleared the routing, deleted the CA and
-    # its key, and unpatched the UI - while the tray survived with
-    # proxy.listening still True and went on reporting "Status: blocking".
+    # Ahead of the flag handlers: --cleanup calls stop_blocking() directly, so
+    # running it against a live instance would clear the routing, delete the CA
+    # and unpatch the UI while that instance carried on reporting "blocking".
     single = claim_single_instance()
 
     if "--cleanup" in sys.argv:
@@ -986,13 +968,10 @@ def main():
 
     @guarded("Startup")
     def startup():
-        # Audio first. These two are independent mechanisms, and the UI patch
-        # is the fragile one - it opens a zip Spotify wrote. An entry with an
-        # unsupported compression method raises RuntimeError out of
-        # sync_patch(), and with the old ordering that exception unwound
-        # through @guarded and start_blocking() never ran at all: a cosmetic
-        # banner failure took down the audio-ad blocking that is the whole
-        # point of the app. Its own try/except below is belt and braces.
+        # Audio first. The two mechanisms are independent and the UI patch is
+        # the fragile one - it opens a zip Spotify wrote. Patching first meant
+        # a cosmetic banner failure could unwind through @guarded and stop
+        # start_blocking() running at all.
         ok, message = start_blocking()
 
         try:
@@ -1038,9 +1017,8 @@ def main():
 
 
 if __name__ == "__main__":
-    # Windows logging off, a Task Manager kill and an OS shutdown all skip the
-    # tray's own exit path, and each one used to leave the machine's proxy
-    # routing pointing at a port that dies with this process.
+    # A Task Manager kill, logging off and an OS shutdown all skip the tray's
+    # own exit path, leaving proxy routing pointed at a port that dies here.
     atexit.register(lambda: shutdown_quietly())
 
     try:
