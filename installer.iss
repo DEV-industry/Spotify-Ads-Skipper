@@ -89,6 +89,51 @@ begin
     Result := RemoveQuotes(Value);
 end;
 
+// The certificate notice lives here rather than popping up after the install,
+// so the whole decision happens inside the one wizard the user is already
+// clicking through. Setup records the answer, and the application finds it and
+// starts working without asking again. Running from source still asks for
+// itself, since there is no installer on that path.
+// An information page, not a checkbox to tick. Continuing IS the agreement,
+// which is how every other page in an installer already works - and a tick box
+// would be one more thing to click for someone who came here to listen to
+// music. It also removes the validation that has to be got right: an earlier
+// version of this page could be walked past unticked on the second attempt.
+procedure InitializeWizard();
+begin
+  CreateOutputMsgPage(
+    wpSelectTasks,
+    'Local certificate',
+    'Spotify Ads Skipper installs one thing alongside itself.',
+    'Spotify sends its ads down the same encrypted connection as your music, ' +
+    'so telling them apart means inspecting that connection on this computer. ' +
+    'That needs a certificate in your personal certificate store, and Setup ' +
+    'will add one.' + #13#10#13#10 +
+    'It is created here and never leaves this computer. It can only vouch for ' +
+    'spotify.com, scdn.co and spotifycdn.com, and only for websites - Windows ' +
+    'rejects anything it signs for another site, for an IP address, or for ' +
+    'e-mail and program signing.' + #13#10#13#10 +
+    'While the app is running, traffic to those Spotify addresses is decrypted ' +
+    'on this computer, a Spotify tab in your browser included. Nothing is ' +
+    'stored and nothing is sent anywhere.' + #13#10#13#10 +
+    'Uninstalling removes the certificate, and so does "Remove local ' +
+    'certificate" in the tray menu.' + #13#10#13#10 +
+    'Click Next to continue, or Cancel to install nothing.');
+end;
+
+procedure RecordConsent();
+var
+  Dir: String;
+begin
+  // Written where the application looks for it, so it starts blocking
+  // immediately instead of asking the same question a second time.
+  Dir := ExpandConstant('{localappdata}\SpotifyAdsSkipper');
+  if not DirExists(Dir) then
+    ForceDirectories(Dir);
+  SaveStringToFile(Dir + '\settings.json', '{' + #13#10 +
+                   '  "consented": true' + #13#10 + '}' + #13#10, False);
+end;
+
 function InitializeSetup(): Boolean;
 var
   Uninstaller: String;
@@ -131,6 +176,14 @@ end;
 // certificate out of the store, and the very next step deletes the file that
 // identifies it. This runs certutil directly, needs nothing of ours to survive,
 // and is harmless when the earlier removal already succeeded.
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // ssPostInstall, so the answer is only recorded once the files are actually
+  // there. Cancelling anywhere earlier writes nothing.
+  if CurStep = ssPostInstall then
+    RecordConsent();
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;

@@ -148,11 +148,12 @@ is no reduced mode to retreat to, so these apply to using it at all.
   only ever vouch for website certificates on Spotify's three domains, and the
   key is encrypted to your account - but it is still a signing key sitting on
   your disk. If that trade is not one you want, do not install this.
-- **The installer is not code-signed.** Windows SmartScreen will warn you, and
-  that warning is doing its job: nothing in the download proves the file came
-  from this repository. Check the SHA-256 published with the release before
-  running it. This matters more here than for most software, because the code
-  that limits the CA is the same code an attacker would replace.
+- **The installer is not code-signed**, so Windows cannot tell you who built
+  it, and its warning is doing its job. That matters more here than for most
+  software: the code that keeps the certificate limited is the same code
+  someone distributing a modified build would strip out. Download it from this
+  repository's releases page and nowhere else - and if you got it somewhere
+  else, the SHA-256 in the release notes is how you check.
 - **While the app runs, traffic to Spotify's domains is decrypted on your
   machine.** That is the whole mechanism. It covers anything on this machine
   talking to those domains, a browser tab on `open.spotify.com` included, so
@@ -182,16 +183,19 @@ You need the Spotify desktop client from [spotify.com](https://www.spotify.com/d
 - the Microsoft Store build installs somewhere else and will not be found.
 
 1. Download `SpotifyAdsSkipper_Setup.exe` from the [latest release](https://github.com/DEV-industry/Spotify-Ads-Skipper/releases/latest).
-2. **Check the SHA-256 against the one in the release notes** before you run it:
-   `Get-FileHash .\SpotifyAdsSkipper_Setup.exe`. The installer is unsigned, so
-   this is the only thing that tells you the file is the one that was published.
-   Windows SmartScreen will warn you for the same reason.
+2. Run it. Windows will warn you that the publisher is unknown - the installer
+   is not code-signed. Choose **More info -> Run anyway** if you trust it.
 3. Click through the wizard. No administrator prompt - it installs per-user.
-4. On first launch it explains the certificate and asks. Choosing Cancel installs nothing and closes.
+4. On first launch it explains the certificate and asks. Cancel installs nothing and closes.
 5. Accept, and Spotify restarts once. From then on it sits in the tray and starts with Windows.
 
 Right-click the tray icon for the status line - `blocking (N ad requests
 dropped)` means it is working.
+
+Every release publishes the installer's SHA-256 in its notes. Nobody needs it
+to install the app; it is there for anyone who wants to confirm the file came
+from here, and it is worth using if you downloaded it from anywhere but this
+repository.
 
 <details>
 <summary><b>Method 2: run from source</b></summary>
