@@ -38,8 +38,29 @@ tray_icon = None
 proxy = None
 pac_server = None
 
-CONFIG_PATH = os.path.join(
-    os.environ.get("APPDATA", ""), "SpotifyAdsSkipper", "settings.json"
+def _config_path():
+    """Where the consent record lives - deliberately NOT the roaming profile.
+
+    This file is how the app knows the user has agreed to a root CA. In
+    %APPDATA% it roams: sign in to a second machine with a roaming or
+    container profile and the consent arrives ahead of the user, so the notice
+    is skipped and a CA is generated and trusted there without anyone being
+    asked. A revocation roams too, which is the same problem pointing the other
+    way. %LOCALAPPDATA% does not roam - it is where the CA key already lives,
+    for the same reason.
+    """
+    base = (os.environ.get("LOCALAPPDATA")
+            or os.environ.get("APPDATA")
+            or os.path.expanduser("~"))
+    return os.path.join(base, "SpotifyAdsSkipper", "settings.json")
+
+
+CONFIG_PATH = _config_path()
+
+# Where releases up to 3.0 kept it. Read once, for migration, then removed.
+LEGACY_CONFIG_PATH = (
+    os.path.join(os.environ.get("APPDATA", ""), "SpotifyAdsSkipper", "settings.json")
+    if os.environ.get("APPDATA") else ""
 )
 
 FIRST_RUN_NOTICE = (
@@ -51,8 +72,10 @@ FIRST_RUN_NOTICE = (
     "that skips this step.\n\n"
     "What that means:\n"
     "- The CA is generated on THIS machine and never leaves it.\n"
-    "- It can only vouch for spotify.com, scdn.co and spotifycdn.com. It "
-    "cannot be used against your bank, your email or any other site.\n"
+    "- It can only vouch for WEBSITE certificates, and only for spotify.com, "
+    "scdn.co and spotifycdn.com. Windows and OpenSSL both reject anything it "
+    "signs for another domain, for a bare IP address, or for any other "
+    "purpose - e-mail signing and code signing included.\n"
     "- Traffic to those Spotify domains is decrypted on this machine while "
     "the app runs. That includes Spotify pages open in your browser, so your "
     "Spotify login travels through it too.\n"
@@ -95,7 +118,17 @@ def redact(text):
     if _HOME:
         text = text.replace(_HOME, "%USERPROFILE%")
         text = text.replace(_HOME.replace("\\", "\\\\"), "%USERPROFILE%")
-    return text
+
+    # Control characters never survive into the log. Most messages here are
+    # built from constants, but some carry a hostname or an exception string
+    # that a local process chose - and a newline in one of those would let it
+    # forge a timestamped line, while a NUL turns the whole file into
+    # something grep calls binary. Both were observed. Escaping rather than
+    # dropping keeps the evidence visible in a bug report.
+    return "".join(
+        ch if ch == "\t" or ch >= " " else "\\x%02x" % ord(ch)
+        for ch in text
+    )
 
 
 # The proxy answers requests on a thread each, and they all log. Without this
@@ -134,20 +167,44 @@ def log_debug(message):
 
 
 def load_config():
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except (OSError, ValueError):
-        return {}
+    for path in (CONFIG_PATH, LEGACY_CONFIG_PATH):
+        if not path:
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                config = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        # A JSON document does not have to be an object. A bare list or string
+        # would sail through json.load and then raise on the first .get(),
+        # out of a function every caller treats as total.
+        if isinstance(config, dict):
+            return config
+    return {}
 
 
 def save_config(config):
+    """Write the config. Returns whether it actually landed.
+
+    The result matters for one caller: withdrawing consent. Swallowing a
+    failure there means the app reports the CA removed while the file still
+    says the user agreed, so the next launch silently installs a new one.
+    """
     try:
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
             json.dump(config, handle, indent=2)
     except OSError:
-        pass
+        return False
+
+    # Once the non-roaming copy exists, drop the roaming one so it cannot
+    # travel to another machine and answer the consent question there.
+    if LEGACY_CONFIG_PATH and LEGACY_CONFIG_PATH != CONFIG_PATH:
+        try:
+            os.remove(LEGACY_CONFIG_PATH)
+        except OSError:
+            pass
+    return True
 
 
 def has_consented():
@@ -167,11 +224,12 @@ def has_consented():
 
 
 def record_consent(given):
+    """Record the answer. Returns whether it was persisted."""
     config = load_config()
     config["consented"] = bool(given)
     # Drop the superseded key so the two cannot drift apart later.
     config.pop("seamless", None)
-    save_config(config)
+    return save_config(config)
 
 
 def create_image():
@@ -308,9 +366,19 @@ def start_blocking():
             )
         # Confirm we are the ones answering on that port before telling Windows
         # to fetch its proxy configuration from it.
+        #
+        # A failure here is logged, not fatal. It cannot actually catch a
+        # squatter - the port was just bound with SO_EXCLUSIVEADDRUSE, so
+        # anything else that had it would have made that bind fail - and the
+        # check has a false-negative mode of its own. Treating it as fatal took
+        # the whole start-up down and, through the except below, deleted the
+        # root certificate installed seconds earlier, regenerating a fresh
+        # 3072-bit CA on the next logon. Every logon.
         if not pac_server.serves_our_pac():
-            raise RuntimeError(
-                "another program is answering on port %d" % pac_server.port
+            log_debug(
+                "PAC self-check did not match on port %d; continuing, since the "
+                "exclusive bind already establishes ownership of the port."
+                % pac_server.port
             )
 
         # Spotify's own prefs proxy keys would fight the PAC; clear them.
@@ -574,7 +642,14 @@ def _remove_ca_worker(icon):
     stop_blocking(untrust_ca=False)
     # Consent is withdrawn along with the certificate, so the next launch asks
     # again rather than quietly reinstalling what was just deliberately removed.
-    record_consent(False)
+    if not record_consent(False):
+        log_debug("Could not persist consent withdrawal; refusing to remove the CA.")
+        notify(
+            "Could not save the setting, so the certificate was left in place. "
+            "Removing it now would mean the app silently reinstalls one next "
+            "time you start it."
+        )
+        return
 
     ok, message = proxy_ca.untrust()
     log_debug("Remove CA: %s (%s)" % (ok, message))
@@ -641,15 +716,39 @@ def run_selftest():
     def crypto():
         import proxy_ca
 
+        # Never load_ca() here. That GENERATES a CA when none exists, so a
+        # diagnostic run would write RSA key material onto a machine whose
+        # user has not been asked yet - and --selftest is reachable before the
+        # consent gate by design, so it can be run at any time.
+        if not proxy_ca.ca_exists():
+            return "no CA yet (nothing generated - run the app to set one up)"
+
         cert, key = proxy_ca.load_ca()
         proxy_ca.make_leaf("gew4-spclient.spotify.com", cert, key)
-        return "CA + leaf signing works (%d-bit), constrained: %s, key ACL: %s" % (
+        return "CA + leaf signing works (%d-bit), constrained: %s, key ACL: %s, key sealed: %s" % (
             key.key_size,
             proxy_ca.is_constrained(cert),
             "restricted" if proxy_ca.key_permissions_ok else "COULD NOT RESTRICT",
+            "yes" if proxy_ca.key_is_sealed else "NO - DPAPI UNAVAILABLE, KEY IS PLAINTEXT",
         )
 
     probe("CA and leaf signing", crypto)
+
+    def upstream_anchors():
+        import ad_proxy
+
+        # The check with no symptom. If the bundle lost certifi, or the context
+        # ever fell back to the Windows store, our own CA becomes a valid
+        # anchor for the connection that exists to detect forged Spotify
+        # certificates - and nothing would look wrong until someone used it.
+        count, ours = ad_proxy.upstream_anchor_count()
+        if ours:
+            raise RuntimeError(
+                "our own CA is trusted for upstream connections (%d anchors)" % count
+            )
+        return "%d anchors, ours correctly absent" % count
+
+    probe("Upstream trust anchors", upstream_anchors)
 
     def routing():
         import proxy_ca
@@ -680,10 +779,35 @@ def run_selftest():
 
 def run_cleanup():
     """Uninstall hook: undo everything this app ever changed."""
+    ca_ok, ca_message = True, ""
     try:
-        stop_blocking()
-    except Exception:
-        pass
+        # Not stop_blocking(): its untrust() result is discarded, and this is
+        # the one place where a failed removal has to be surfaced. Inno's
+        # [UninstallRun] cannot read an exit code, and it deletes the data
+        # directory - including the certificate file that identifies our entry
+        # in the store - immediately afterwards. A silent failure here is a
+        # trusted root left behind permanently with nothing left to find it by.
+        stop_blocking(untrust_ca=False)
+    except Exception as exc:
+        log_debug("Cleanup could not stop blocking: %s" % exc)
+
+    try:
+        import proxy_ca
+
+        ca_ok, ca_message = proxy_ca.untrust()
+        log_debug("Cleanup CA removal: %s (%s)" % (ca_ok, ca_message))
+    except Exception as exc:
+        ca_ok, ca_message = False, str(exc)
+        log_debug("Cleanup CA removal raised: %s" % exc)
+
+    if not ca_ok:
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                0, ca_message, "Spotify Skipper - certificate not removed",
+                0x10 | MB_SETFOREGROUND | MB_TOPMOST,
+            )
+        except Exception:
+            pass
 
     # Spotify holds xpui.spa open, so without this the restore fails with a
     # permission error and the uninstaller - which ignores our exit code -
@@ -699,6 +823,7 @@ def run_cleanup():
 
     leftovers = [
         CONFIG_PATH,
+        LEGACY_CONFIG_PATH,
         # Taken the first time the proxy stripped proxy keys out of Spotify's
         # prefs; nothing else ever removes it.
         os.path.join(os.environ.get("APPDATA", ""), "Spotify", "prefs.skipper-backup"),
@@ -710,7 +835,7 @@ def run_cleanup():
         except OSError:
             pass
 
-    return 0 if ok else 1
+    return 0 if (ok and ca_ok) else 1
 
 
 # Local\, not Global\. Creating a Global object needs SeCreateGlobalPrivilege,
@@ -754,13 +879,30 @@ def claim_single_instance():
 def main():
     global tray_icon
 
+    # The mutex comes first, ahead of the flag handlers. --cleanup used to run
+    # before it and called stop_blocking() directly, so running the exe with
+    # that flag against a live instance cleared the routing, deleted the CA and
+    # its key, and unpatched the UI - while the tray survived with
+    # proxy.listening still True and went on reporting "Status: blocking".
+    single = claim_single_instance()
+
     if "--cleanup" in sys.argv:
+        if not single:
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Spotify Ads Skipper is still running.\n\n"
+                "Close it from the tray first, then try again - otherwise the "
+                "running copy would keep working with its certificate already "
+                "deleted.",
+                "Spotify Skipper", 0x30,
+            )
+            sys.exit(1)
         sys.exit(run_cleanup())
 
     if "--selftest" in sys.argv:
         sys.exit(run_selftest())
 
-    if not claim_single_instance():
+    if not single:
         ctypes.windll.user32.MessageBoxW(
             0,
             "Spotify Ads Skipper is already running.\n\n"
@@ -768,6 +910,12 @@ def main():
             "Spotify Skipper", 0x40,
         )
         sys.exit(0)
+
+    # Ahead of the Spotify-missing exit below. Routing outlives the process on
+    # any hard stop, and if Spotify is later uninstalled or moved this function
+    # would never run again on any subsequent launch - stranding AutoConfigURL
+    # on a dead, and therefore claimable, port indefinitely.
+    reconcile_routing()
 
     if not spotify_env.is_spotify_installed():
         ctypes.windll.user32.MessageBoxW(
@@ -792,12 +940,22 @@ def main():
 
     @guarded("Startup")
     def startup():
-        reconcile_routing()
-        patched, patch_message = sync_patch()
+        # Audio first. These two are independent mechanisms, and the UI patch
+        # is the fragile one - it opens a zip Spotify wrote. An entry with an
+        # unsupported compression method raises RuntimeError out of
+        # sync_patch(), and with the old ordering that exception unwound
+        # through @guarded and start_blocking() never ran at all: a cosmetic
+        # banner failure took down the audio-ad blocking that is the whole
+        # point of the app. Its own try/except below is belt and braces.
+        ok, message = start_blocking()
+
+        try:
+            patched, patch_message = sync_patch()
+        except Exception as exc:
+            patched, patch_message = False, str(exc)
         if not patched:
             log_debug("Display ads not blocked: %s" % patch_message)
 
-        ok, message = start_blocking()
         if ok:
             # Spotify may have launched ahead of us and already given up on the
             # proxy; this puts it right.

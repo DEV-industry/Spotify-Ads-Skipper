@@ -105,16 +105,25 @@ first run asks before setting any of it up, and exits if you say no. So:
   never shipped in the installer. This matters: a CA baked into the executable
   would put the same private key on every user's disk, and anyone who downloaded
   the app could impersonate any HTTPS site for everyone else who installed it.
-- **The CA can only vouch for Spotify.** It carries a critical `NameConstraints`
-  extension permitting `spotify.com`, `scdn.co` and `spotifycdn.com` and nothing
-  else. A certificate it signs for any other domain is rejected by the operating
-  system before it ever reaches an application - so even someone holding the
-  private key cannot use it against your bank or your email. Verified against
-  both Windows CryptoAPI (`HasNotPermittedNameConstraint`) and OpenSSL
-  (`permitted subtree violation`).
+- **The CA is limited by name and by purpose.** A critical `NameConstraints`
+  extension permits `spotify.com`, `scdn.co` and `spotifycdn.com`, excludes the
+  entire IPv4 and IPv6 address space, and an `ExtendedKeyUsage` of `serverAuth`
+  limits it to website certificates. So even someone holding the private key
+  cannot sign for your bank (`HAS_NOT_PERMITTED_NAME_CONSTRAINT`), for a bare
+  IP address (`HAS_EXCLUDED_NAME_CONSTRAINT`), or for e-mail and code signing
+  (`NOT_VALID_FOR_USAGE`). Each of those was measured against Windows'
+  own chain engine and OpenSSL, not assumed.
+
+  Both halves are needed. Name constraints restrict only the name *forms* that
+  appear in the permitted list, so a DNS-only constraint left IP addresses
+  unconstrained - and said nothing at all about what the certificate could be
+  *used for*. An earlier build had exactly that gap.
 - **The private key is encrypted at rest** with DPAPI, tied to your Windows
-  account, and written with an ACL restricted to it. Copied to another machine
-  or another account, the file is useless.
+  account, and written with an ACL restricted to it - a single entry, with
+  Administrators and SYSTEM removed. Copied to another machine or another
+  account, the file is useless. On the rare machine where DPAPI itself fails
+  the key is stored unencrypted instead, and the app says so: **Remove local
+  certificate** and check `selftest.txt`, which reports `key sealed: NO`.
 - **Only Spotify's domains are intercepted.** A PAC file routes
   `*.spotify.com`, `*.scdn.co` and `*.spotifycdn.com` to the proxy and returns
   `DIRECT` for everything else. The proxy refuses to connect anywhere else at
@@ -135,10 +144,15 @@ first run asks before setting any of it up, and exits if you say no. So:
 Read this before installing, and before handing the app to someone else. There
 is no reduced mode to retreat to, so these apply to using it at all.
 
-- **A root CA is a sensitive thing to install.** The name constraints mean it
-  can only ever vouch for Spotify's three domains, and the key is encrypted to
-  your account - but it is still a signing key sitting on your disk. If that
-  trade is not one you want, do not install this.
+- **A root CA is a sensitive thing to install.** The constraints mean it can
+  only ever vouch for website certificates on Spotify's three domains, and the
+  key is encrypted to your account - but it is still a signing key sitting on
+  your disk. If that trade is not one you want, do not install this.
+- **The installer is not code-signed.** Windows SmartScreen will warn you, and
+  that warning is doing its job: nothing in the download proves the file came
+  from this repository. Check the SHA-256 published with the release before
+  running it. This matters more here than for most software, because the code
+  that limits the CA is the same code an attacker would replace.
 - **While the app runs, traffic to Spotify's domains is decrypted on your
   machine.** That is the whole mechanism. It covers anything on this machine
   talking to those domains, a browser tab on `open.spotify.com` included, so
@@ -168,7 +182,10 @@ You need the Spotify desktop client from [spotify.com](https://www.spotify.com/d
 - the Microsoft Store build installs somewhere else and will not be found.
 
 1. Download `SpotifyAdsSkipper_Setup.exe` from the [latest release](https://github.com/DEV-industry/Spotify-Ads-Skipper/releases/latest).
-2. Run it. Windows SmartScreen will warn you, because the installer is not code-signed: **More info -> Run anyway**.
+2. **Check the SHA-256 against the one in the release notes** before you run it:
+   `Get-FileHash .\SpotifyAdsSkipper_Setup.exe`. The installer is unsigned, so
+   this is the only thing that tells you the file is the one that was published.
+   Windows SmartScreen will warn you for the same reason.
 3. Click through the wizard. No administrator prompt - it installs per-user.
 4. On first launch it explains the certificate and asks. Choosing Cancel installs nothing and closes.
 5. Accept, and Spotify restarts once. From then on it sits in the tray and starts with Windows.
@@ -282,6 +299,10 @@ dropped)` and the number climbs as Spotify asks for ads. Anything starting
 No. It writes inside `%APPDATA%\Spotify` and `%LOCALAPPDATA%\SpotifyAdsSkipper`,
 sets a per-user proxy autoconfig entry, and installs its CA into the *user*
 certificate store. None of that needs elevation.
+
+That cuts both ways, and it is the reason key theft is not the disaster it
+sounds like: any program already running as you can install a root CA of its
+own, unconstrained, without a prompt. Stealing this one would be a downgrade.
 
 </details>
 

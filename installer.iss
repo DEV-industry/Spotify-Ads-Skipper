@@ -105,9 +105,38 @@ begin
             'Remove it now? (You may be asked for administrator permission.)',
             mbConfirmation, MB_YESNO) = IDYES then
   begin
-    Exec(Uninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '',
-         SW_SHOW, ewWaitUntilTerminated, ResultCode);
+    // Both results were discarded here. Exec uses CreateProcess, so an
+    // unelevated setup launching a requireAdministrator uninstaller can fail
+    // with ERROR_ELEVATION_REQUIRED before any prompt is shown - the user sees
+    // nothing happen and setup carried on as if the old copy were gone. It is
+    // not: its HKLM Run value and its machine-wide hosts-file block survive,
+    // and this per-user uninstaller can never remove either.
+    if (not Exec(Uninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '',
+                 SW_SHOW, ewWaitUntilTerminated, ResultCode))
+       or (OldMachineWideUninstaller() <> '') then
+    begin
+      MsgBox('The older version could not be removed.' + #13#10#13#10 +
+             'Remove "Spotify Ads Skipper" from Settings > Apps first, then '
+             + 'run this installer again.', mbError, MB_OK);
+      Result := False;
+    end;
   end
   else
     Result := False;
+end;
+
+// Removing the CA depends on the application executable, which [UninstallRun]
+// invokes just before deleting it. If that copy is missing - quarantined by an
+// antivirus, deleted by hand, or simply failing - nothing else would take the
+// certificate out of the store, and the very next step deletes the file that
+// identifies it. This runs certutil directly, needs nothing of ours to survive,
+// and is harmless when the earlier removal already succeeded.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+    Exec(ExpandConstant('{sys}\certutil.exe'),
+         '-user -delstore Root "Spotify Ads Skipper Local CA"', '',
+         SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;

@@ -360,7 +360,7 @@ def _is_intact(path):
     try:
         with zipfile.ZipFile(path, "r") as archive:
             return CSS_ENTRY in archive.namelist()
-    except (zipfile.BadZipFile, OSError):
+    except (zipfile.BadZipFile, OSError, RuntimeError):
         return False
 
 
@@ -376,7 +376,7 @@ def is_patched(path=None):
                 return False
             css = archive.read(CSS_ENTRY).decode("utf-8", errors="replace")
         return START_MARKER in css
-    except (zipfile.BadZipFile, OSError):
+    except (zipfile.BadZipFile, OSError, RuntimeError):
         return False
 
 
@@ -486,7 +486,12 @@ def apply_patch():
             raise OSError("Spotify replaced xpui.spa while it was being patched")
 
         os.replace(temp_path, XPUI_PATH)
-    except (zipfile.BadZipFile, OSError, PermissionError) as exc:
+    # RuntimeError belongs here alongside the obvious ones: zipfile raises it,
+    # not BadZipFile, for an encrypted entry or a compression method it does
+    # not implement. Left out, it escaped this function entirely and took the
+    # caller's startup thread with it - so a single odd entry in Spotify's own
+    # bundle stopped the audio-ad blocking, which has nothing to do with zips.
+    except (zipfile.BadZipFile, OSError, PermissionError, RuntimeError) as exc:
         if os.path.isfile(temp_path):
             try:
                 os.remove(temp_path)

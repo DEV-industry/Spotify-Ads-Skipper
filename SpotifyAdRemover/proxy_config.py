@@ -13,7 +13,9 @@ directly - while an http://127.0.0.1 one is fetched and honoured. So a tiny
 loopback HTTP server ships alongside the proxy purely to hand out this file.
 """
 
+import http.client
 import os
+import secrets
 import socket
 import threading
 import winreg
@@ -27,7 +29,21 @@ OWN_KEY = r"Software\SpotifyAdsSkipper"
 SAVED_VALUE = "PreviousAutoConfigURL"
 
 PAC_HOST = "127.0.0.1"
-DEFAULT_PAC_PORT = 8798
+
+# 0 means "let Windows pick". A fixed, published port is one an attacker knows
+# in advance, and the value of knowing it is not theoretical: AutoConfigURL
+# outlives the process on every OS shutdown (atexit does not run under
+# TerminateProcess, and pystray installs no WM_ENDSESSION handler), so the
+# registry can point at a port nobody holds. Loopback on Windows is a single
+# machine-wide namespace with no session isolation, so a second standard user
+# can then bind it and serve a PAC of their choosing to this user's
+# applications. An unpredictable port does not close that window, but it stops
+# it being campable in advance.
+DEFAULT_PAC_PORT = 0
+
+# The stable half of the path. is_enabled() and disable() both recognise our
+# own AutoConfigURL by finding this substring, so it must not be randomised or
+# the app can no longer identify - or clean up - its own routing.
 PAC_FILENAME = "spotify-ads.pac"
 
 # Kept in step with ad_proxy.SPOTIFY_SUFFIXES.
@@ -76,10 +92,20 @@ class PacServer(threading.Thread):
         self._log = log or (lambda _m: None)
         self._httpd = None
         self.bind_error = None
+        # Unguessable suffix on the path. Windows fetches whatever URL it is
+        # given, so this does not authenticate anything to Windows - what it
+        # does is stop a web page, or another local process, from requesting a
+        # URL it can predict and learning that this app is installed and which
+        # port the proxy is on.
+        self._token = secrets.token_urlsafe(12)
+
+    @property
+    def path(self):
+        return "/%s-%s" % (PAC_FILENAME, self._token)
 
     @property
     def url(self):
-        return "http://%s:%d/%s" % (PAC_HOST, self.port, PAC_FILENAME)
+        return "http://%s:%d%s" % (PAC_HOST, self.port, self.path)
 
     @property
     def alive(self):
@@ -94,11 +120,24 @@ class PacServer(threading.Thread):
         application on the machine that reads a PAC, so it is worth one request
         to confirm the answer is ours before pointing Windows at it.
         """
+        # http.client, not urllib.request. The default opener honours this
+        # user's own HKCU ProxyEnable/ProxyServer and http_proxy, and CPython's
+        # proxy_bypass_registry treats "<local>" as covering only hosts with no
+        # dot - so 127.0.0.1 is NOT bypassed. Reproduced against a healthy
+        # PacServer: the direct GET returned a byte-identical body while this
+        # check returned False, which the caller reads as "another program is
+        # answering on that port" and responds to by tearing down and deleting
+        # the root CA it installed seconds earlier. Every logon.
         try:
-            import urllib.request
-
-            with urllib.request.urlopen(self.url, timeout=timeout) as response:
-                return response.read() == self._body
+            conn = http.client.HTTPConnection(PAC_HOST, self.port, timeout=timeout)
+            try:
+                conn.request("GET", self.path, headers={
+                    "Host": "%s:%d" % (PAC_HOST, self.port),
+                })
+                response = conn.getresponse()
+                return response.status == 200 and response.read() == self._body
+            finally:
+                conn.close()
         except Exception:
             return False
 
@@ -106,9 +145,8 @@ class PacServer(threading.Thread):
     def run(self):
         body = self._body
         logger = self._log
-
-        expected_path = "/" + PAC_FILENAME
-        expected_hosts = {"%s:%d" % (PAC_HOST, self.port), PAC_HOST}
+        expected_path = self.path
+        server = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -116,6 +154,11 @@ class PacServer(threading.Thread):
                 # loopback. A page in a browser cannot read this response, but
                 # a DNS-rebinding one can, and it would learn that the app is
                 # installed and which port the proxy sits on.
+                #
+                # expected_hosts is computed per request rather than captured:
+                # the port is not known until after the bind, because it is
+                # allocated by Windows.
+                expected_hosts = {"%s:%d" % (PAC_HOST, server.port), PAC_HOST}
                 host = (self.headers.get("Host") or "").strip().lower()
                 if self.path != expected_path or host not in expected_hosts:
                     self.send_response(404)
@@ -125,6 +168,12 @@ class PacServer(threading.Thread):
                 self.send_response(200)
                 self.send_header("Content-Type", "application/x-ns-proxy-autoconfig")
                 self.send_header("Content-Length", str(len(body)))
+                # A PAC file is syntactically valid JavaScript, and the Host
+                # check does not stop <script src="http://127.0.0.1:PORT/...">,
+                # which sends exactly the Host header we accept. Without this
+                # header a page that guessed the URL could load the body as a
+                # script and call FindProxyForURL cross-origin.
+                self.send_header("X-Content-Type-Options", "nosniff")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -134,6 +183,11 @@ class PacServer(threading.Thread):
         class Server(ThreadingHTTPServer):
             # Threaded so one stalled fetch cannot stop the rest being served.
             daemon_threads = True
+            # Thread-per-connection on a port any local process can reach is a
+            # thread budget any local process can exhaust - and starving this
+            # process also starves the proxy's accept loop and the tray. The
+            # proxy has had a ceiling all along; this one had none.
+            request_queue_size = 16
             # Emphatically not allow_reuse_address. On Windows that maps to
             # SO_REUSEADDR, which - unlike on POSIX - lets another process bind
             # this live port and take delivery of the requests. Whoever wins
@@ -159,11 +213,18 @@ class PacServer(threading.Thread):
                 logger("PAC request from %s failed (ignored)" % (client_address,))
 
         try:
-            self._httpd = Server((PAC_HOST, self.port), Handler)
+            httpd = Server((PAC_HOST, self.port), Handler)
         except OSError as exc:
             self.bind_error = str(exc)
             logger("PAC server could not bind port %d: %s" % (self.port, exc))
             return
+
+        # Read back what was actually allocated. With DEFAULT_PAC_PORT = 0 the
+        # port is not known until the bind has happened, and `url` - which is
+        # what gets written into the registry - is built from it. Set before
+        # _httpd, so `alive` cannot go True while `port` still reads 0.
+        self.port = httpd.server_address[1]
+        self._httpd = httpd
 
         logger("PAC server on %s" % self.url)
         try:
@@ -262,10 +323,27 @@ def disable():
     """
     current = _read_autoconfig()
     if current is not None and PAC_FILENAME not in current:
+        # Someone else's PAC is installed now. Leave it and drop our parked
+        # copy; restoring over it would be us overwriting a live setting.
+        _forget_previous()
+        return True, "Proxy routing already cleared."
+
+    if current is None:
+        # No AutoConfigURL at all. The old guard was `current is not None and
+        # ...`, so this case fell through to the restore below and WROTE the
+        # parked value into a slot that held nothing - resurrecting a corporate
+        # PAC that Group Policy or a VPN client had since removed. There is
+        # nothing of ours to undo here.
         _forget_previous()
         return True, "Proxy routing already cleared."
 
     previous = _read_saved()
+    if previous is not None and not isinstance(previous, str):
+        # REG_SZ is what we write, but the value is readable and writable by
+        # anything running as this user. A non-string would raise inside the
+        # key block below, past the OSError handler, leaving AutoConfigURL
+        # pointing at a port that is about to close.
+        previous = None
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, INTERNET_SETTINGS, 0,
                             winreg.KEY_SET_VALUE) as key:
@@ -323,6 +401,14 @@ def clear_spotify_prefs():
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp, prefs)
+        # The replace was atomic, so the backup has done its job. Keeping it
+        # would leave a frozen copy of a file containing the user's saved login
+        # blob lying around indefinitely - outliving a Spotify logout, a
+        # credential rotation, and Spotify's own uninstall.
+        try:
+            os.remove(backup)
+        except OSError:
+            pass
         return True
     except OSError:
         try:
