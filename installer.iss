@@ -107,8 +107,8 @@ begin
     'Spotify Ads Skipper installs one thing alongside itself.',
     'Spotify sends its ads down the same encrypted connection as your music, ' +
     'so telling them apart means inspecting that connection on this computer. ' +
-    'That needs a certificate in your personal certificate store, and Setup ' +
-    'will add one.' + #13#10#13#10 +
+    'That needs a certificate trusted by your Windows account, and Setup will ' +
+    'add one.' + #13#10#13#10 +
     'It is created here and never leaves this computer. It can only vouch for ' +
     'spotify.com, scdn.co and spotifycdn.com, and only for websites - Windows ' +
     'rejects anything it signs for another site, for an IP address, or for ' +
