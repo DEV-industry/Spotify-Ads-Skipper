@@ -3,13 +3,20 @@ name: tests
 # The suite exists so defects stop being found one at a time, by hand. That
 # only works if something runs it without being asked.
 on:
+  # Every branch, not just main. A failure is worth knowing about while the
+  # work is still in progress, rather than after it has been merged.
   push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A push to a branch that already has a pull request open triggers both events.
+# Keep the newest run and drop the rest.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unittest:
