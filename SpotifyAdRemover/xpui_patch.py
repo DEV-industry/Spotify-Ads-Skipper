@@ -342,11 +342,24 @@ def build_html(html):
 
 
 def _is_intact(path):
-    """True when path is a readable bundle that still carries the CSS entry."""
+    """True when path is a bundle whose CSS entry can actually be read.
+
+    This guards both directions of the backup: whether the current bundle is
+    fit to copy, and whether a backup is fit to write over a working file. So
+    it has to decompress, not just list. namelist() only reads the central
+    directory, and an entry can be present there while its data is truncated
+    or stored with a method zipfile cannot handle - which would pass the guard
+    and restore a Spotify that does not render.
+    """
     try:
         with zipfile.ZipFile(path, "r") as archive:
-            return CSS_ENTRY in archive.namelist()
-    except (zipfile.BadZipFile, OSError, RuntimeError):
+            if CSS_ENTRY not in archive.namelist():
+                return False
+            with archive.open(CSS_ENTRY) as entry:
+                while entry.read(65536):
+                    pass
+        return True
+    except (zipfile.BadZipFile, OSError, RuntimeError, EOFError, ValueError):
         return False
 
 

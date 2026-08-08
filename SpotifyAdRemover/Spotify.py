@@ -195,7 +195,11 @@ def save_config(config):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
             json.dump(config, handle, indent=2)
-    except OSError:
+    except Exception:
+        # Broad on purpose: the contract is "say whether it landed", and a
+        # caller deciding whether to remove a root certificate must never have
+        # to handle an exception from it. OSError alone missed ValueError from
+        # a malformed path and TypeError from an unserialisable value.
         return False
 
     # Once the non-roaming copy exists, drop the roaming one so it cannot
