@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ad_proxy
 import proxy_ca
 import proxy_config
+import spotify_env
 import xpui_patch
 
 
@@ -952,6 +953,221 @@ class TestLogging(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.path + ".1"))
         with open(self.path, encoding="utf-8") as handle:
             self.assertIn("after rotation", handle.read())
+
+
+class TestStoreBuildDetection(unittest.TestCase):
+    """Telling "no Spotify" apart from "the build we cannot patch".
+
+    The Store build is the most common reason is_spotify_installed() says no,
+    and the generic message sends those users hunting for a bug in this app
+    instead of at the install that would fix it. Getting it wrong the other way
+    is just as bad: telling somebody to uninstall a Store build they have
+    already removed.
+    """
+
+    FULL_NAME = "SpotifyAB.SpotifyMusic_1.290.913.0_x86__zpdnekdrzrea0"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="skipper-store-")
+        self._orig = spotify_env.registered_msix_packages
+
+    def tearDown(self):
+        spotify_env.registered_msix_packages = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _registry_says(self, *packages):
+        spotify_env.registered_msix_packages = lambda: list(packages)
+
+    def _installed(self, name):
+        """A package whose files are actually on disk."""
+        root = os.path.join(self.tmp, name)
+        os.makedirs(root)
+        return (name, root)
+
+    def test_an_installed_store_package_is_recognised(self):
+        self._registry_says(self._installed(self.FULL_NAME))
+        self.assertTrue(spotify_env.is_store_build_installed())
+
+    def test_no_packages_at_all(self):
+        self._registry_says()
+        self.assertFalse(spotify_env.is_store_build_installed())
+
+    def test_other_packages_are_not_mistaken_for_it(self):
+        self._registry_says(
+            self._installed("Microsoft.WindowsCalculator_11.2508.4.0_x64__8wekyb3d8bbwe")
+        )
+        self.assertFalse(spotify_env.is_store_build_installed())
+
+    def test_a_registration_whose_files_are_gone_does_not_count(self):
+        # Uninstalling leaves the registry entry behind pointing at a folder
+        # that no longer exists. Believing it means telling somebody who has
+        # already done what we asked to go and do it again.
+        self._registry_says((self.FULL_NAME, os.path.join(self.tmp, "removed")))
+        self.assertFalse(spotify_env.is_store_build_installed())
+
+    def test_a_registration_with_no_root_folder_recorded(self):
+        self._registry_says((self.FULL_NAME, ""))
+        self.assertFalse(spotify_env.is_store_build_installed())
+
+    def test_the_match_survives_a_change_of_casing(self):
+        # NTFS is case-insensitive and the name comes from the manifest, so
+        # matching on exact casing would fail silently and quietly restore the
+        # message this whole branch exists to avoid.
+        name, root = self._installed(self.FULL_NAME.lower())
+        self._registry_says((name.upper(), root))
+        self.assertTrue(spotify_env.is_store_build_installed())
+
+    def test_a_differently_suffixed_publisher_is_not_a_match(self):
+        self._registry_says(self._installed("SpotifyAB.SpotifyMusicOther_1.0_x86__x"))
+        self.assertFalse(spotify_env.is_store_build_installed())
+
+    def test_a_live_package_is_still_found_behind_a_dead_one(self):
+        self._registry_says(
+            (self.FULL_NAME, os.path.join(self.tmp, "removed")),
+            self._installed(self.FULL_NAME + "2"),
+        )
+        self.assertTrue(spotify_env.is_store_build_installed())
+
+    def test_reading_the_real_registry_never_raises(self):
+        # The suite runs on machines with and without MSIX packages; the only
+        # invariant worth asserting is that it answers rather than throwing
+        # into the error dialog it exists to choose.
+        packages = self._orig()
+        self.assertIsInstance(packages, list)
+        self.assertTrue(all(len(entry) == 2 for entry in packages))
+        self.assertIn(spotify_env.is_store_build_installed(), (True, False))
+
+
+class TestPackageRegistryReader(unittest.TestCase):
+    """The registry half, against a real key rather than a stand-in.
+
+    Stubbing registered_msix_packages() out - which every test above does -
+    leaves the winreg code covered by nothing at all: it could be deleted and
+    the suite would stay green. So this builds an actual key under HKCU,
+    which needs no elevation, and points the reader at it.
+    """
+
+    KEY = r"Software\SpotifyAdsSkipper-test\Packages"
+
+    def setUp(self):
+        import winreg
+
+        self.winreg = winreg
+        self.tmp = tempfile.mkdtemp(prefix="skipper-registry-")
+        self._orig = spotify_env.PACKAGE_REPOSITORY
+        spotify_env.PACKAGE_REPOSITORY = self.KEY
+        self._drop_key()
+        winreg.CreateKey(winreg.HKEY_CURRENT_USER, self.KEY).Close()
+
+    def tearDown(self):
+        spotify_env.PACKAGE_REPOSITORY = self._orig
+        self._drop_key()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _drop_key(self):
+        # DeleteKey refuses a key that still has children, and leaving one
+        # behind would carry a package - and its value - into the next test.
+        def drop(path):
+            try:
+                with self.winreg.OpenKey(self.winreg.HKEY_CURRENT_USER, path) as key:
+                    children = [
+                        self.winreg.EnumKey(key, i)
+                        for i in range(self.winreg.QueryInfoKey(key)[0])
+                    ]
+            except OSError:
+                return
+            for child in children:
+                drop("%s\\%s" % (path, child))
+            try:
+                self.winreg.DeleteKey(self.winreg.HKEY_CURRENT_USER, path)
+            except OSError:
+                pass
+
+        drop(os.path.dirname(self.KEY))
+
+    def _package(self, name, root=None, kind=None):
+        """Register a package; root=None means no value recorded at all."""
+        path = "%s\\%s" % (self.KEY, name)
+        with self.winreg.CreateKey(self.winreg.HKEY_CURRENT_USER, path) as key:
+            if root is not None:
+                self.winreg.SetValueEx(
+                    key, "PackageRootFolder", 0, kind or self.winreg.REG_SZ, root
+                )
+
+    def _folder(self, name):
+        path = os.path.join(self.tmp, name)
+        os.makedirs(path)
+        return path
+
+    def test_a_package_is_read_back_with_its_folder(self):
+        root = self._folder("live")
+        self._package("Vendor.App_1.0_x64__abc", root)
+        self.assertEqual(
+            spotify_env.registered_msix_packages(), [("Vendor.App_1.0_x64__abc", root)]
+        )
+
+    def test_a_package_with_no_root_folder_recorded_is_skipped(self):
+        # Two of the inbox packages on a stock Windows 11 are like this.
+        self._package("Vendor.App_1.0_x64__abc", None)
+        self.assertEqual(spotify_env.registered_msix_packages(), [])
+
+    def test_a_non_string_root_is_skipped(self):
+        # os.path.isdir(b"C:\\Windows") is True, so bytes reaching the check
+        # would match a directory that has nothing to do with the package.
+        self._package("Vendor.App_1.0_x64__abc", b"C:\\Windows", self.winreg.REG_BINARY)
+        self.assertEqual(spotify_env.registered_msix_packages(), [])
+
+    def test_an_expandable_root_is_expanded(self):
+        # winreg hands REG_EXPAND_SZ back verbatim, and "%LOCALAPPDATA%\..."
+        # matches nothing on disk - the Store build would go unrecognised.
+        root = self._folder("expandable")
+        os.environ["SKIPPER_TEST_ROOT"] = self.tmp
+        self.addCleanup(os.environ.pop, "SKIPPER_TEST_ROOT", None)
+        self._package(
+            "Vendor.App_1.0_x64__abc",
+            "%SKIPPER_TEST_ROOT%\\expandable",
+            self.winreg.REG_EXPAND_SZ,
+        )
+        self.assertEqual(spotify_env.registered_msix_packages()[0][1], root)
+
+    def test_a_missing_repository_key_reads_as_no_packages(self):
+        spotify_env.PACKAGE_REPOSITORY = r"Software\SpotifyAdsSkipper-test\nope"
+        self.assertEqual(spotify_env.registered_msix_packages(), [])
+        self.assertFalse(spotify_env.is_store_build_installed())
+
+    def test_the_store_build_is_found_through_the_real_registry(self):
+        self._package(
+            "SpotifyAB.SpotifyMusic_1.290.913.0_x86__zpdnekdrzrea0",
+            self._folder("SpotifyAB.SpotifyMusic"),
+        )
+        self.assertTrue(spotify_env.is_store_build_installed())
+
+
+class TestNoSpotifyMessage(unittest.TestCase):
+    """Which of the two dialogs a user actually gets."""
+
+    def setUp(self):
+        import Spotify
+
+        self.app = Spotify
+        self._orig = spotify_env.is_store_build_installed
+
+    def tearDown(self):
+        spotify_env.is_store_build_installed = self._orig
+
+    def test_the_store_build_is_named(self):
+        spotify_env.is_store_build_installed = lambda: True
+        message = self.app.no_spotify_message()
+        self.assertIn("Microsoft Store", message)
+        self.assertIn("spotify.com", message)
+        # The sentence this whole branch exists to keep off the screen.
+        self.assertNotIn("was not found", message)
+
+    def test_otherwise_the_plain_one(self):
+        spotify_env.is_store_build_installed = lambda: False
+        message = self.app.no_spotify_message()
+        self.assertIn("was not found", message)
+        self.assertNotIn("Microsoft Store", message)
 
 
 if __name__ == "__main__":

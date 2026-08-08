@@ -737,7 +737,17 @@ def run_selftest():
     lines.append("frozen: %s" % bool(getattr(sys, "frozen", False)))
     lines.append("")
 
-    probe("Spotify installed", lambda: spotify_env.is_spotify_installed())
+    def spotify_install():
+        if spotify_env.is_spotify_installed():
+            return True
+        # Raised rather than returned: with nothing to patch and nothing to
+        # route, no mechanism below can work, and a report that ends in "all
+        # mechanisms available" on such a machine is worse than no report.
+        if spotify_env.is_store_build_installed():
+            raise RuntimeError("Microsoft Store build - install the one from spotify.com")
+        raise RuntimeError("not found in %APPDATA%\\Spotify")
+
+    probe("Spotify installed", spotify_install)
     probe("Spotify version", lambda: spotify_env.spotify_version() or "not found")
     probe("UI patch state", lambda: "patched" if xpui_patch.is_patched() else "not patched")
 
@@ -797,7 +807,12 @@ def run_selftest():
     probe("Current install state", routing)
 
     lines.append("")
-    lines.append("RESULT: %s" % ("all mechanisms available" if ok else "SOMETHING IS BROKEN"))
+    # Not "SOMETHING IS BROKEN" unconditionally: the commonest failure by far
+    # is the wrong build of Spotify, and telling that user the app is broken is
+    # the misreading the Spotify probe exists to prevent.
+    lines.append("RESULT: %s" % (
+        "all mechanisms available" if ok else "NOT WORKING - see the FAIL lines above"
+    ))
     report = "\n".join(lines)
 
     print(report)
@@ -870,6 +885,29 @@ def run_cleanup():
             pass
 
     return 0 if (ok and ca_ok) else 1
+
+
+def no_spotify_message():
+    """What to tell somebody whose Spotify this app cannot work with.
+
+    Kept apart from main() so both branches can be read - and tested - without
+    standing up a tray icon.
+    """
+    if spotify_env.is_store_build_installed():
+        # "Spotify was not found" reads as a bug in this app to somebody who is
+        # looking at Spotify while it plays. Naming the build they have is the
+        # difference between a bug report and a two-minute fix.
+        return (
+            "You have the Microsoft Store version of Spotify, which this app "
+            "does not support - it installs as a Windows package rather than "
+            "into %APPDATA%\\Spotify, where everything here does its work.\n\n"
+            "Uninstall it, install Spotify from spotify.com/download/windows, "
+            "then run this again."
+        )
+    return (
+        "Spotify was not found in %APPDATA%\\Spotify.\n\n"
+        "Install the Spotify desktop app first, then run this again."
+    )
 
 
 # Local\, not Global\. Creating a Global object needs SeCreateGlobalPrivilege,
@@ -950,12 +988,9 @@ def main():
     reconcile_routing()
 
     if not spotify_env.is_spotify_installed():
-        ctypes.windll.user32.MessageBoxW(
-            0,
-            "Spotify was not found in %APPDATA%\\Spotify.\n\n"
-            "Install the Spotify desktop app first, then run this again.",
-            "Spotify Skipper", 0x10,
-        )
+        reason = no_spotify_message()
+        log_debug("Spotify not usable: %s" % reason.replace("\n", " ").strip())
+        ctypes.windll.user32.MessageBoxW(0, reason, "Spotify Skipper", 0x10)
         sys.exit(1)
 
     # Asked before anything is created or installed, and only once. Declining
