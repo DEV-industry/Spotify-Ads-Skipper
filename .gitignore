@@ -1,0 +1,22 @@
+# PyInstaller output. The build directory in particular embeds absolute paths
+# from whoever ran the build, which means the developer's Windows account name.
+build/
+dist/
+installer_dist/
+*.spec.bak
+
+__pycache__/
+*.py[cod]
+
+# Runtime output. These now live under %LOCALAPPDATA%\SpotifyAdsSkipper, but
+# older installs left copies beside the executable and in the source tree.
+debug_log.txt
+debug_log.txt.1
+crash_log.txt
+selftest.txt
+
+# Never commit key material, whatever the extension.
+*.pem
+*.key
+*.pfx
+*.p12

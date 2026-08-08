@@ -3,7 +3,7 @@
 
   # Spotify Ads Skipper
 
-  **Your music, uninterrupted. Seamless host-based ad blocking for Windows.**
+  **Audio ads never play. Not muted - never fetched. The next track starts immediately.**
 
   <p>
     <img src="https://komarev.com/ghpvc/?username=DEV-industry-Spotify-Ads-Skipper&label=VIEWS&style=for-the-badge&color=green" alt="Views" />
@@ -16,7 +16,7 @@
   <p>
     <img src="https://img.shields.io/badge/Spotify-1ED760?style=for-the-badge&logo=spotify&logoColor=white" alt="Spotify" />
     <img src="https://img.shields.io/badge/Python-3.x-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
-    <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows" />
+    <img src="https://img.shields.io/badge/Platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Platform" />
     <img src="https://img.shields.io/github/last-commit/DEV-industry/Spotify-Ads-Skipper?style=for-the-badge&color=555555&label=UPDATED" alt="Last commit" />
   </p>
 
@@ -29,17 +29,14 @@
   </a>
 </div>
 
-> [!TIP]
-> **Project website:** [spotify-skipper-web.vercel.app](https://spotify-skipper-web.vercel.app/) - one-click download, feature tour and setup guide.
-
 ---
 
 ## Contents
 
 - [What it does](#what-it-does)
 - [How it works](#how-it-works)
-- [Features](#features)
-- [Screenshots](#screenshots)
+- [What it installs](#what-it-installs)
+- [Risks, stated plainly](#risks-stated-plainly)
 - [Installation](#installation)
 - [Project structure](#project-structure)
 - [FAQ](#faq)
@@ -49,94 +46,176 @@
 
 ## What it does
 
-**Spotify Ads Skipper** is a lightweight Windows utility that **completely blocks ads** in the Spotify desktop app.
+A tray utility for Windows that stops Spotify's ads from being delivered at
+all. Spotify serves two kinds of advertising over two different paths, so there
+are two mechanisms - both always on, neither optional:
 
-Instead of muting ads or restarting the client the way older tools do, this version uses **host-based blocking**. It adds Spotify's ad servers to your Windows `hosts` file and points them at `0.0.0.0`, so ad requests never reach the network. The ads simply fail to load and your music keeps playing - no silence, no interruptions, no restarts.
+| Ad type | What happens |
+| :-- | :-- |
+| **Audio** - the spoken ads between tracks | **Never played.** The request is answered with a 404 and the client moves straight to the next track |
+| **Display** - home banners, takeovers, video overlays | **Removed** from the client's UI bundle |
 
-The whole thing is a single `.exe` that lives in your system tray and cleans up after itself when you close it.
+There is no "mute the ad instead" mode. Silencing an ad still costs you the
+thirty seconds; this does not. That means the app cannot work without a local
+certificate authority, so it asks once on first run and closes if you decline -
+see [what it installs](#what-it-installs).
+
+It needs no administrator rights. It patches Spotify's UI bundle in
+`%APPDATA%\Spotify`, keeps its own settings and log in
+`%LOCALAPPDATA%\SpotifyAdsSkipper`, and touches nothing else.
 
 ---
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A[Spotify app] -->|requests content| B{Windows hosts file}
-    B -->|ad server domains| C[0.0.0.0 - nowhere]
-    B -->|music and API| D[Real Spotify servers]
-    C --> E[Ad never loads]
-    D --> F[Track keeps playing]
-    E --> F
-    F --> G[Uninterrupted music]
+**Audio ads** are fetched by the client's native core from a handful of paths on
+the same host as everything else:
+
+```
+POST /ads/v3/ads?slots=preroll     <- the ad fetch
+POST /ad-logic/prefetch
+GET  /ads/v2/config
+     /sponsoredplaylist/v1/sponsored
 ```
 
-1. On launch, the app requests administrator rights (needed to edit the `hosts` file).
-2. It writes a block list of Spotify ad domains between two clearly marked comment lines.
-3. It flushes the DNS cache so the change takes effect immediately.
-4. When you close it from the tray, it removes that block and restores your original `hosts` file.
+Playback travels entirely different paths - `/metadata/`, `/playplay/`,
+`/playlist/`, `/widevine-license/`. The app runs a local proxy that answers the
+ad paths with a 404 and forwards everything else untouched. The client treats
+the empty slot as "no ad" and moves straight to the next track.
 
-Nothing is changed outside those marked lines, and nothing is left behind after you quit.
+**Display ads** live in `xpui.spa`, the client's UI bundle. The app appends a
+CSS block hiding every ad container by its `data-testid`. Those attributes are
+what Spotify's own tests select on, so they outlast the minified class names
+that change with each build. If one is renamed the rule stops matching - the ad
+reappears, nothing breaks.
 
----
-
-## Features
-
-| Feature | What it means |
-| :-- | :-- |
-| **Host blocking** | Ads are blocked at the network level - the ad servers are redirected to `0.0.0.0`, so they never load. |
-| **Seamless** | No restarts, no muting, no silence gaps. Your queue just keeps flowing. |
-| **All in one** | A single `.exe` with the block list and tray icon embedded. |
-| **Safe and clean** | Your original `hosts` file is backed up and restored automatically when you exit. |
-| **Invisible** | Runs silently in the system tray using almost no resources. |
+**Staying patched.** Spotify replaces `xpui.spa` wholesale when it updates. The
+app records the version it patched and re-applies after an update.
 
 ---
 
-## Screenshots
+## What it installs
 
-<div align="center">
-  <img src="photos/background.png" alt="Spotify running ad-free" width="80%" />
-  <br />
-  <em>Spotify running with ads blocked - the music never stops.</em>
-</div>
+To read request paths inside Spotify's HTTPS traffic, the proxy has to terminate
+TLS, which means presenting certificates the client trusts. This is not an
+optional extra - it is how the app blocks anything at all, which is why the
+first run asks before setting any of it up, and exits if you say no. So:
+
+- **A certificate authority is generated on your machine, on first use.** It is
+  never shipped in the installer. This matters: a CA baked into the executable
+  would put the same private key on every user's disk, and anyone who downloaded
+  the app could impersonate any HTTPS site for everyone else who installed it.
+- **The CA is limited by name and by purpose.** A critical `NameConstraints`
+  extension permits `spotify.com`, `scdn.co` and `spotifycdn.com`, excludes the
+  entire IPv4 and IPv6 address space, and an `ExtendedKeyUsage` of `serverAuth`
+  limits it to website certificates. So even someone holding the private key
+  cannot sign for your bank (`HAS_NOT_PERMITTED_NAME_CONSTRAINT`), for a bare
+  IP address (`HAS_EXCLUDED_NAME_CONSTRAINT`), or for e-mail and code signing
+  (`NOT_VALID_FOR_USAGE`). Each of those was measured against Windows'
+  own chain engine and OpenSSL, not assumed.
+
+  Both halves are needed. Name constraints restrict only the name *forms* that
+  appear in the permitted list, so a DNS-only constraint left IP addresses
+  unconstrained - and said nothing at all about what the certificate could be
+  *used for*. An earlier build had exactly that gap.
+- **The private key is encrypted at rest** with DPAPI, tied to your Windows
+  account, and written with an ACL restricted to it - a single entry, with
+  Administrators and SYSTEM removed. Copied to another machine or another
+  account, the file is useless. On the rare machine where DPAPI itself fails
+  the key is stored unencrypted instead, and the app says so: **Remove local
+  certificate** and check `selftest.txt`, which reports `key sealed: NO`.
+- **Only Spotify's domains are intercepted.** A PAC file routes
+  `*.spotify.com`, `*.scdn.co` and `*.spotifycdn.com` to the proxy and returns
+  `DIRECT` for everything else. The proxy refuses to connect anywhere else at
+  all, so it cannot be used as a relay by anything else on the machine.
+- **A dead proxy falls back to DIRECT.** If the app is killed rather than closed,
+  the PAC entry outlives it - the fallback means Spotify connects straight out
+  and ads return, instead of losing connectivity. The next start clears it.
+- **Uninstalling removes the CA and the routing**, and so does **Remove local
+  certificate** in the tray menu - which closes the app, since blocking depends
+  on it, and makes the next launch ask again. If removal ever fails, the app
+  says so rather than reporting success, and the menu item stays put for as
+  long as a certificate is installed.
+
+---
+
+## Risks, stated plainly
+
+Read this before installing, and before handing the app to someone else. There
+is no reduced mode to retreat to, so these apply to using it at all.
+
+- **A root CA is a sensitive thing to install.** The constraints mean it can
+  only ever vouch for website certificates on Spotify's three domains, and the
+  key is encrypted to your account - but it is still a signing key sitting on
+  your disk. If that trade is not one you want, do not install this.
+- **The installer is not code-signed**, so Windows cannot tell you who built
+  it, and its warning is doing its job. That matters more here than for most
+  software: the code that keeps the certificate limited is the same code
+  someone distributing a modified build would strip out. Download it from this
+  repository's releases page and nowhere else - and if you got it somewhere
+  else, the SHA-256 in the release notes is how you check.
+- **While the app runs, traffic to Spotify's domains is decrypted on your
+  machine.** That is the whole mechanism. It covers anything on this machine
+  talking to those domains, a browser tab on `open.spotify.com` included, so
+  your Spotify login passes through the local proxy. Nothing is written to disk
+  and nothing leaves the machine, but it is worth knowing going in.
+- **The certificate stays installed until you remove it.** Closing the app stops
+  the proxy and the routing, but deliberately leaves the certificate in place so
+  it can come back up next time. **Remove local certificate** or uninstalling
+  are what get rid of it.
+- **This is detectable by Spotify.** It does not merely block traffic on your
+  own machine; it answers Spotify's API requests on their behalf, and the client
+  will keep re-requesting an ad it never receives. That is a visible pattern
+  server-side. No account action is known to follow from it, but the risk is not
+  zero, and it is a deeper intervention than the hosts-file blocking earlier
+  versions used.
+- **Patching the client breaks Spotify's Terms of Service.**
+- **Ad endpoints can move.** They are paths, not domains, and Spotify can rename
+  them. When that happens ads come back until the list is updated.
 
 ---
 
 ## Installation
 
-### Method 1: the easy way (installer)
+### Method 1: the installer
+
+You need the Spotify desktop client from [spotify.com](https://www.spotify.com/download/windows/)
+- the Microsoft Store build installs somewhere else and will not be found.
 
 1. Download `SpotifyAdsSkipper_Setup.exe` from the [latest release](https://github.com/DEV-industry/Spotify-Ads-Skipper/releases/latest).
-2. Run the installer and follow the on-screen steps (it installs to Program Files and adds a Desktop shortcut).
-3. Launch it. The app starts blocking ads right away and runs quietly in the tray.
+2. Run it. Windows will warn you that the publisher is unknown - the installer
+   is not code-signed. Choose **More info -> Run anyway** if you trust it.
+3. Click through the wizard. No administrator prompt - it installs per-user.
+4. On first launch it explains the certificate and asks. Cancel installs nothing and closes.
+5. Accept, and Spotify restarts once. From then on it sits in the tray and starts with Windows.
 
-That is all. Open Spotify and enjoy.
+Right-click the tray icon for the status line - `blocking (N ad requests
+dropped)` means it is working.
+
+Every release publishes the installer's SHA-256 in its notes. Nobody needs it
+to install the app; it is there for anyone who wants to confirm the file came
+from here, and it is worth using if you downloaded it from anywhere but this
+repository.
 
 <details>
-<summary><b>Method 2: run from source (for developers)</b></summary>
+<summary><b>Method 2: run from source</b></summary>
 
 <br />
 
-If you want to run it from Python or modify the code:
-
 ```bash
-# 1. Clone the repository
 git clone https://github.com/DEV-industry/Spotify-Ads-Skipper.git
 cd Spotify-Ads-Skipper
-
-# 2. Install the tray-icon dependencies
-pip install pystray Pillow
-
-# 3. Run the script (it will ask for admin rights)
+pip install pystray Pillow psutil pywin32 cryptography certifi
 python SpotifyAdRemover/Spotify.py
 ```
 
-The core logic uses only the Python standard library. `pystray` and `Pillow` are required only for the system-tray icon.
-
-To remove the block manually without opening the app, run:
+Undo everything without opening the app:
 
 ```bash
 python SpotifyAdRemover/Spotify.py --cleanup
 ```
+
+Build with `pyinstaller SpotifyAdRemover/Spotify.spec`.
 
 </details>
 
@@ -145,16 +224,14 @@ python SpotifyAdRemover/Spotify.py --cleanup
 ## Project structure
 
 ```text
-Spotify-Ads-Skipper/
-├── SpotifyAdRemover/
-│   ├── Spotify.py        # Main source code (tray app + hosts logic)
-│   ├── Spotify.spec      # PyInstaller build spec
-│   ├── ad_hosts.txt      # The ad-server block list
-│   └── cat.ico           # Tray icon
-├── photos/               # README images
-├── installer.iss         # Inno Setup installer script
-├── LICENSE               # MIT
-└── README.md             # This file
+SpotifyAdRemover/
+├── Spotify.py        # Tray app, consent gate, orchestrates both mechanisms
+├── ad_proxy.py       # Path-filtering HTTPS proxy - kills audio ads
+├── proxy_ca.py       # Per-installation certificate authority
+├── proxy_config.py   # PAC file and Windows proxy routing
+├── xpui_patch.py     # Backs up / patches / restores xpui.spa - kills display ads
+├── spotify_env.py    # Locates the Spotify install, inspects its state
+└── Spotify.spec      # PyInstaller build spec
 ```
 
 ---
@@ -162,38 +239,74 @@ Spotify-Ads-Skipper/
 ## FAQ
 
 <details>
-<summary><b>Why does it need administrator rights?</b></summary>
+<summary><b>Version 2 used the hosts file. Why did that stop working?</b></summary>
 
 <br />
 
-The Windows `hosts` file lives in a protected system folder (`C:\Windows\System32\drivers\etc\`). Editing it requires elevated permissions. The app only touches the block it adds between its own markers and never modifies anything else.
+Two changes on Spotify's side, either one fatal:
+
+1. **Endpoints became regional.** The client is handed a per-region hostname at
+   run time - `gew4-`, `gae2-`, `guc3-spclient.spotify.com` and others - so no
+   static list can enumerate them. Blocking them all would break the app anyway,
+   since that host also carries playlists, search and playback state.
+2. **Ad audio moved onto the music CDN.** Measured directly: during an ad the
+   client streams from `audio-fa.scdn.co`, the same host that serves music.
+   There is no hostname that is only ever an ad.
+
+10 of the 39 domains on the old list had also stopped resolving entirely. The
+approach is dead, not stale - which is why v3 filters by URL path instead, where
+the separation is still clean.
 
 </details>
 
 <details>
-<summary><b>Is it safe? What happens when I close it?</b></summary>
+<summary><b>Can I use it without installing the certificate?</b></summary>
 
 <br />
 
-Yes. Everything the app writes is wrapped in clearly labelled start and end markers. When you quit from the tray (or run it with `--cleanup`), it removes exactly that block and restores your `hosts` file to its original state, then flushes DNS.
+No. Reading the request path is the only way to tell an ad fetch from playback,
+and that path is inside TLS. Earlier builds offered muting as a certificate-free
+alternative; it was removed, because it does not actually save you the ad - it
+just makes you sit through it in silence.
+
+Decline at the first-run prompt and the app installs nothing and closes.
 
 </details>
 
 <details>
-<summary><b>Does it modify Spotify itself?</b></summary>
+<summary><b>What happens if the app crashes?</b></summary>
 
 <br />
 
-No. It never patches, injects into, or restarts the Spotify client. It only changes how ad-server domains resolve on your machine, so the ads fail to load.
+The PAC file falls back to `DIRECT`, so Spotify connects normally and ads come
+back. You lose the blocking, not your connection. Starting the app again clears
+the stale entry and restores it.
 
 </details>
 
 <details>
-<summary><b>Ads still show up. What do I do?</b></summary>
+<summary><b>How do I know it is actually working?</b></summary>
 
 <br />
 
-Spotify occasionally rotates its ad domains. Grab the latest release, which ships with an updated block list. If you spot a domain that is not covered, open an issue and it can be added.
+Right-click the tray icon. The status line reads `blocking (N ad requests
+dropped)` and the number climbs as Spotify asks for ads. Anything starting
+`NOT BLOCKING` means ads are getting through, and says why.
+
+</details>
+
+<details>
+<summary><b>Does it need administrator rights?</b></summary>
+
+<br />
+
+No. It writes inside `%APPDATA%\Spotify` and `%LOCALAPPDATA%\SpotifyAdsSkipper`,
+sets a per-user proxy autoconfig entry, and installs its CA into the *user*
+certificate store. None of that needs elevation.
+
+That cuts both ways, and it is the reason key theft is not the disaster it
+sounds like: any program already running as you can install a root CA of its
+own, unconstrained, without a prompt. Stealing this one would be a downgrade.
 
 </details>
 
@@ -201,14 +314,21 @@ Spotify occasionally rotates its ad domains. Grab the latest release, which ship
 
 ## Disclaimer
 
-This project was created for educational purposes, to demonstrate network traffic control through Windows `hosts` file modification.
+Built for educational purposes: HTTPS path filtering through a local proxy,
+name-constrained certificate authorities, and client-side UI patching.
 
-The author does not encourage blocking ads on services you enjoy. If you love Spotify, please consider Premium to support the artists who make the music.
+Modifying the Spotify client and intercepting its API traffic both break
+Spotify's Terms of Service. The author does not encourage blocking ads on
+services you enjoy - if you love Spotify, Premium supports the artists.
 
 ---
 
 <div align="center">
-  If this tool saved your ears, consider leaving a star - it genuinely helps other people find the project.
+  If this tool saved your ears, consider leaving a star.
+  <br /><br />
+  <a href="https://buymeacoffee.com/kakofinds">
+    <img src="https://img.shields.io/badge/BUY%20ME%20A%20COFFEE-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black" alt="Buy me a coffee" height="42" />
+  </a>
   <br /><br />
   Built and maintained by DEV. Licensed under MIT.
 </div>
