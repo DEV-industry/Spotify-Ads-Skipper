@@ -295,16 +295,28 @@ def _current_user_sid():
 
 
 def _lock_down(path):
-    """Restrict a file to the account this process runs as. Returns success.
+    """Restrict a file or directory to the account this process runs as.
+
+    Returns success.
 
     The principal comes from the process token, never from %USERNAME%. That
     environment variable is attacker-controlled - anyone able to launch this
     app with a crafted environment could set it to "*S-1-1-0", which icacls
     accepts happily and which grants the CA key to Everyone.
+
+    On a directory the grant is made inheritable, and that is load-bearing
+    rather than tidy. Without (OI)(CI) the directory's ACE applies to the
+    directory alone, so Windows falls back to the process token's default DACL
+    for anything created inside - measured: a new file in the locked CA
+    directory came out with SYSTEM full control and a logon-session SID
+    alongside the user. The proxy writes a leaf private key into that
+    directory for every new hostname, so this is what protects those, and it
+    is why they no longer each pay for their own icacls run.
     """
     sid = _current_user_sid()
     if not sid:
         return False
+    grant = "*%s:(OI)(CI)F" % sid if os.path.isdir(path) else "*%s:F" % sid
     try:
         result = subprocess.run(
             [
@@ -312,8 +324,8 @@ def _lock_down(path):
                 # Drops ACEs the file inherited from its parent...
                 "/inheritance:r",
                 # ...replaces whatever this account had with exactly full
-                # control...
-                "/grant:r", "*%s:F" % sid,
+                # control, inheritable when this is a directory...
+                "/grant:r", grant,
                 # ...and removes the two principals Windows puts on files
                 # directly. /inheritance:r does not touch those, because they
                 # are explicit rather than inherited, so without these the

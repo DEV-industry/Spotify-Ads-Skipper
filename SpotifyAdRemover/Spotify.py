@@ -345,7 +345,22 @@ def start_blocking():
         proxy = ad_proxy.AdProxy(port=ad_proxy.DEFAULT_PORT, log=log_debug)
         proxy.start()
 
-        pac_server = proxy_config.PacServer(ad_proxy.DEFAULT_PORT, log=log_debug)
+        # Wait for the bind before building the PAC. The port is allocated by
+        # Windows now, and the PAC file has to name the real one - reading it
+        # too early would publish 0.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if proxy.listening or proxy.bind_error:
+                break
+            time.sleep(0.05)
+
+        if not proxy.listening:
+            raise RuntimeError(
+                "the ad proxy could not take a port (%s)"
+                % (proxy.bind_error or "unknown")
+            )
+
+        pac_server = proxy_config.PacServer(proxy.port, log=log_debug)
         pac_server.start()
 
         deadline = time.monotonic() + 5
@@ -353,12 +368,6 @@ def start_blocking():
             if pac_server.alive or pac_server.bind_error:
                 break
             time.sleep(0.05)
-
-        if not proxy.listening:
-            raise RuntimeError(
-                "the ad proxy could not take port %d (%s)"
-                % (ad_proxy.DEFAULT_PORT, proxy.bind_error or "unknown")
-            )
         if not pac_server.alive:
             raise RuntimeError(
                 "the routing server could not take port %d (%s)"
@@ -564,6 +573,43 @@ def shutdown_quietly():
         shutdown()
     except Exception:
         pass
+
+
+def start_shutdown_watcher():
+    """Clear the routing when Windows is logging off or shutting down.
+
+    atexit does not run when the session manager ends the process, and pystray
+    installs no WM_ENDSESSION handler - so a normal shutdown left AutoConfigURL
+    in the registry pointing at a port nobody would hold until the next launch.
+    That is the ordinary post-reboot state, not an exotic crash, and the port
+    is claimable by anything on the machine while it lasts.
+
+    SetConsoleCtrlHandler is what is available to a windowed process without a
+    message loop of its own: Windows delivers CTRL_LOGOFF_EVENT and
+    CTRL_SHUTDOWN_EVENT through it. A best-effort belt to reconcile_routing()'s
+    braces at the next start, not a replacement for it.
+    """
+    CTRL_CLOSE_EVENT = 2
+    CTRL_LOGOFF_EVENT = 5
+    CTRL_SHUTDOWN_EVENT = 6
+    HANDLER = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+
+    def on_event(event):
+        if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
+            shutdown_quietly()
+        return 0  # Fall through to the default handler either way.
+
+    handler = HANDLER(on_event)
+    # Held on the module, or it is garbage collected and Windows calls into
+    # freed memory the next time the machine shuts down.
+    _ctrl_handlers.append(handler)
+    try:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(handler, True)
+    except Exception as exc:
+        log_debug("Could not install the shutdown handler: %s" % exc)
+
+
+_ctrl_handlers = []
 
 
 def start_status_refresher(icon):
@@ -987,6 +1033,7 @@ def main():
 
     threading.Thread(target=startup, daemon=True).start()
     start_status_refresher(tray_icon)
+    start_shutdown_watcher()
     tray_icon.run()
 
 

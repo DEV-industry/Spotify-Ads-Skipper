@@ -34,7 +34,13 @@ import urllib.parse
 import proxy_ca
 
 LISTEN_HOST = "127.0.0.1"
-DEFAULT_PORT = 8799
+
+# 0 means "let Windows pick", for the same reason the PAC port does. A fixed
+# published port is one anything on the machine can wait for and claim while
+# the app is not running. Losing the race is not a compromise here - the bind
+# fails and the app refuses to start rather than sending traffic to a stranger
+# - but it is a denial of service that costs an attacker nothing to arrange.
+DEFAULT_PORT = 0
 
 # The only hosts this proxy will connect to at all. The PAC hands us Spotify
 # and returns DIRECT for everything else, so nothing legitimate ever asks for
@@ -458,7 +464,15 @@ class AdProxy(threading.Thread):
         # Written into the CA directory rather than %TEMP%: SSLContext can only
         # load a chain from a path, and %TEMP% files inherit permissions that
         # let every process on the machine read this private key. The CA
-        # directory is already locked to this account.
+        # directory is already locked to this account, and a file created in it
+        # inherits that DACL - which is what protects this one.
+        #
+        # No per-file icacls here. It measured at 292.9 ms, six times the RSA
+        # keygen it accompanied, making it by far the most expensive thing on
+        # the path from a new hostname to a working connection - and it was
+        # re-applying, to a file that lives for microseconds, the same
+        # restriction the directory already carries. generate_ca() locks the
+        # directory down before any key material is written to it.
         os.makedirs(proxy_ca.CA_DIR, exist_ok=True)
         handle, path = tempfile.mkstemp(suffix=".pem", dir=proxy_ca.CA_DIR)
         try:
@@ -469,7 +483,6 @@ class AdProxy(threading.Thread):
                     format=serialization.PrivateFormat.PKCS8,
                     encryption_algorithm=serialization.NoEncryption(),
                 ))
-            proxy_ca._lock_down(path)
             ctx.load_cert_chain(path)
         finally:
             try:
@@ -513,6 +526,10 @@ class AdProxy(threading.Thread):
             except OSError:
                 pass
             return
+        # Read back what Windows allocated. With DEFAULT_PORT = 0 the port is
+        # not known until now, and the PAC file has to name it. Assigned before
+        # _server, so `listening` cannot go True while `port` still reads 0.
+        self.port = server.getsockname()[1]
         self._server = server
         self._server.settimeout(1.0)
         self._log("Proxy listening on %s:%d" % (LISTEN_HOST, self.port))
@@ -791,6 +808,18 @@ class AdProxy(threading.Thread):
             try:
                 tls_client.sendall(raw)
             except OSError:
+                return False
+
+            # Responses get the same framing check requests already had. A head
+            # carrying both Content-Length and chunked, or two conflicting
+            # lengths, can be framed two ways - and whichever this parser picks,
+            # the leftover bytes become the head of the next response. Measured:
+            # duplicate lengths of 3 and 20 delivered "ABC" and left 17 bytes to
+            # be read as the following reply. Confined to one client's own
+            # tunnel, since nothing is pooled upstream, but it is the exact case
+            # already refused in the other direction.
+            if _framing_is_ambiguous(raw):
+                self._log("Ambiguous response framing; closing the connection")
                 return False
 
             status = _status_code(raw)

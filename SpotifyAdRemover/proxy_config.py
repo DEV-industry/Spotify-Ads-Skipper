@@ -46,6 +46,11 @@ DEFAULT_PAC_PORT = 0
 # the app can no longer identify - or clean up - its own routing.
 PAC_FILENAME = "spotify-ads.pac"
 
+# Connections handled at once. Windows fetches this file occasionally, per
+# application, so a handful is generous - and the port is reachable by anything
+# on the machine, which is the reason there is a ceiling at all.
+MAX_PAC_CONNECTIONS = 16
+
 # Kept in step with ad_proxy.SPOTIFY_SUFFIXES.
 #
 # The "; DIRECT" fallback matters: if this app is killed rather than closed, the
@@ -98,6 +103,9 @@ class PacServer(threading.Thread):
         # URL it can predict and learning that this app is installed and which
         # port the proxy is on.
         self._token = secrets.token_urlsafe(12)
+        # Nothing legitimate needs more than a handful: Windows fetches this
+        # file occasionally, per application.
+        self._slots = threading.Semaphore(MAX_PAC_CONNECTIONS)
 
     @property
     def path(self):
@@ -180,14 +188,44 @@ class PacServer(threading.Thread):
             def log_message(self, *_args):
                 pass  # Silence the default stderr logging.
 
+        slots = self._slots
+
         class Server(ThreadingHTTPServer):
             # Threaded so one stalled fetch cannot stop the rest being served.
             daemon_threads = True
-            # Thread-per-connection on a port any local process can reach is a
-            # thread budget any local process can exhaust - and starving this
-            # process also starves the proxy's accept loop and the tray. The
-            # proxy has had a ceiling all along; this one had none.
             request_queue_size = 16
+
+            def process_request(self, request, client_address):
+                # A real ceiling, not just a listen backlog. request_queue_size
+                # bounds connections WAITING to be accepted; on its own this
+                # server still spawned a thread for every one it did accept, so
+                # any local process could exhaust the process's thread budget -
+                # which starves the proxy's accept loop and the tray with it.
+                # The proxy has had a semaphore all along; this had nothing.
+                if not slots.acquire(blocking=False):
+                    logger("PAC server at capacity, dropping a connection")
+                    # Closed directly, NOT through shutdown_request: that path
+                    # ends in close_request, and releasing a slot that was
+                    # never acquired would raise the ceiling every time it is
+                    # hit - turning the limit into its own bypass.
+                    try:
+                        request.close()
+                    except Exception:
+                        pass
+                    return
+                try:
+                    ThreadingHTTPServer.process_request(self, request, client_address)
+                except BaseException:
+                    # The thread never started, so nothing else will release.
+                    slots.release()
+                    raise
+
+            def process_request_thread(self, request, client_address):
+                try:
+                    ThreadingHTTPServer.process_request_thread(
+                        self, request, client_address)
+                finally:
+                    slots.release()
             # Emphatically not allow_reuse_address. On Windows that maps to
             # SO_REUSEADDR, which - unlike on POSIX - lets another process bind
             # this live port and take delivery of the requests. Whoever wins
