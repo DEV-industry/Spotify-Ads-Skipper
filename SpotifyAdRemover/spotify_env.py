@@ -26,6 +26,83 @@ def is_spotify_installed():
     return os.path.isfile(XPUI_PATH) and os.path.isfile(SPOTIFY_EXE)
 
 
+# The Microsoft Store build keeps nothing where this module looks: it is an
+# MSIX package, so its files live under WindowsApps and its per-user data
+# inside the package. Everything here and in xpui_patch is aimed at
+# %APPDATA%\Spotify, so that build is simply not supported.
+#
+# Worth telling apart from "no Spotify at all" all the same. "Spotify was not
+# found" reads as nonsense to somebody who is looking at Spotify while playing
+# music, and sends them hunting for a bug here instead of at the one thing that
+# would fix it.
+#
+# Matched case-insensitively against the package full name, which begins with
+# the family name: SpotifyAB.SpotifyMusic_1.2.3.4_x86__zpdnekdrzrea0.
+STORE_PACKAGE_PREFIX = "spotifyab.spotifymusic_"
+
+# Readable by the user who owns it; no elevation, no AppX PowerShell module.
+PACKAGE_REPOSITORY = (
+    r"Software\Classes\Local Settings\Software\Microsoft\Windows"
+    r"\CurrentVersion\AppModel\Repository\Packages"
+)
+
+
+def registered_msix_packages():
+    """(package full name, install folder) for each registered MSIX package.
+
+    Packages with no install folder recorded are skipped - a couple of the
+    inbox ones have none. Empty when the registry cannot be read at all, which
+    is the same answer as no packages: this only ever picks which of two error
+    messages to show, so failing closed costs nothing.
+    """
+    found = []
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PACKAGE_REPOSITORY) as repo:
+            for index in range(winreg.QueryInfoKey(repo)[0]):
+                try:
+                    name = winreg.EnumKey(repo, index)
+                    with winreg.OpenKey(repo, name) as package:
+                        root, kind = winreg.QueryValueEx(package, "PackageRootFolder")
+                except OSError:
+                    # A package installed or removed while this loop runs
+                    # shifts the indices. Missing one only costs the more
+                    # specific of two messages.
+                    continue
+                if not isinstance(root, str):
+                    continue
+                # QueryValueEx hands REG_EXPAND_SZ back unexpanded, and an
+                # unexpanded path never matches anything on disk.
+                if kind == winreg.REG_EXPAND_SZ:
+                    root = os.path.expandvars(root)
+                found.append((name, root))
+    # ImportError covers a non-Windows import, which is worth surviving here:
+    # nothing else in this module needs a registry to answer.
+    except (OSError, ImportError):
+        return []
+    return found
+
+
+def is_store_build_installed():
+    """True when the Microsoft Store build of Spotify is installed.
+
+    Only ever asked once is_spotify_installed() has already said no.
+
+    Deliberately not "is there a %LOCALAPPDATA%\\Packages\\SpotifyAB.* folder".
+    That folder is user data and outlives the package - on this developer's own
+    machine 16 of 174 such folders belong to software that is long gone. Anyone
+    who had already followed the advice would be told to follow it again.
+
+    A registration outlives the files too, so it is only believed when the
+    folder it points at is still there.
+    """
+    return any(
+        name.lower().startswith(STORE_PACKAGE_PREFIX) and root and os.path.isdir(root)
+        for name, root in registered_msix_packages()
+    )
+
+
 def spotify_version():
     """Read the client version off Spotify.exe, or None if unavailable."""
     if not os.path.isfile(SPOTIFY_EXE):

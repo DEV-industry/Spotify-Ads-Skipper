@@ -177,10 +177,12 @@ is no reduced mode to retreat to, so these apply to using it at all.
 
 ## Installation
 
-### Method 1: the installer
+Either method needs the Spotify desktop client from
+[spotify.com](https://www.spotify.com/download/windows/). The Microsoft Store
+build will not do - see the FAQ below for why, and what to do if that is the
+one you have.
 
-You need the Spotify desktop client from [spotify.com](https://www.spotify.com/download/windows/)
-- the Microsoft Store build installs somewhere else and will not be found.
+### Method 1: the installer
 
 1. Download `SpotifyAdsSkipper_Setup.exe` from the [latest release](https://github.com/DEV-industry/Spotify-Ads-Skipper/releases/latest).
 2. Run it. Windows will warn you that the publisher is unknown - the installer
@@ -237,6 +239,24 @@ SpotifyAdRemover/
 ---
 
 ## FAQ
+
+<details>
+<summary><b>Why won't it work with the Microsoft Store version of Spotify?</b></summary>
+
+<br />
+
+Because everything here is aimed at `%APPDATA%\Spotify` - the UI bundle it
+patches, the backup it keeps, the version stamp it compares. The Store version
+is a Windows package: it installs under `WindowsApps`, keeps its data inside the
+package, and none of those paths exist. Supporting it would be a different piece
+of software, not a wider search.
+
+Uninstall it, install the client from
+[spotify.com](https://www.spotify.com/download/windows/), and run the Skipper
+again. It recognises the Store build on launch and says so by name, rather than
+reporting that Spotify is missing while you are looking at it.
+
+</details>
 
 <details>
 <summary><b>Version 2 used the hosts file. Why did that stop working?</b></summary>
