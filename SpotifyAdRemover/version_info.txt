@@ -5,8 +5,8 @@
 # built this and what it is.
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 0, 0, 0),
-    prodvers=(3, 0, 0, 0),
+    filevers=(3, 0, 1, 0),
+    prodvers=(3, 0, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -22,12 +22,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'DEV Industry'),
             StringStruct('FileDescription', 'Spotify Ads Skipper'),
-            StringStruct('FileVersion', '3.0.0.0'),
+            StringStruct('FileVersion', '3.0.1.0'),
             StringStruct('InternalName', 'Spotify-Ads-Skipper'),
             StringStruct('LegalCopyright', 'MIT Licence'),
             StringStruct('OriginalFilename', 'Spotify-Ads-Skipper.exe'),
             StringStruct('ProductName', 'Spotify Ads Skipper'),
-            StringStruct('ProductVersion', '3.0.0.0'),
+            StringStruct('ProductVersion', '3.0.1.0'),
           ],
         )
       ]

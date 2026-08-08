@@ -1,7 +1,7 @@
 ; Inno Setup script for Spotify Ads Skipper.
 
 #define MyAppName "Spotify Ads Skipper"
-#define MyAppVersion "3.0"
+#define MyAppVersion "3.0.1"
 #define MyAppPublisher "DEV Industry"
 #define MyAppURL "https://github.com/DEV-industry/Spotify-Ads-Skipper"
 #define MyAppExeName "Spotify-Ads-Skipper.exe"
