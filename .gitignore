@@ -20,3 +20,9 @@ selftest.txt
 *.key
 *.pfx
 *.p12
+
+# The promo video project is not part of the shipped product and nothing in
+# it is referenced by the README, so it is kept out of the repository - it is
+# 7 MB of captured footage and album artwork that a clone has no use for.
+# The images the README does use are rendered out of it into photos/.
+promo/
