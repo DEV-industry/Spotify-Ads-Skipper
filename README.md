@@ -20,16 +20,7 @@
 
 </div>
 
-<!--
-  DEMO VIDEO
-  GitHub renders .mp4 inline, but only from its own CDN - a relative path to a
-  file in the repo will not play. To add it:
-    1. Open a new issue in this repo (do not submit it).
-    2. Drag promo/out/promo-en.mp4 into the comment box and wait for the upload.
-    3. Copy the https://github.com/user-attachments/... URL it inserts.
-    4. Paste that URL on a line of its own below, then close the issue.
-  Limit is 10 MB on free accounts; the file is ~5 MB.
--->
+https://github.com/user-attachments/assets/868c0282-92ce-4c17-bf4f-5e61006268f4
 
 ---
 
